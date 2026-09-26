@@ -136,6 +136,7 @@ async function resolveUsername(req, res, next) {
 
     if (username.toLowerCase() === 'alice') {
       return res.status(501).json({
+        success: false,
         error: "Not Implemented",
       });
     }

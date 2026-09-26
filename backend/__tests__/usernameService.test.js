@@ -12,7 +12,7 @@ const usernameService = require("../src/services/usernameService");
 describe("usernameService", () => {
   beforeEach(() => {
     // Clear in-memory storage before each test
-    usernameService.usernameMap?.clear?.();
+    usernameService._clearForTesting();
   });
 
   describe("registerUsername", () => {
@@ -35,7 +35,7 @@ describe("usernameService", () => {
       expect(() => {
         usernameService.registerUsername(
           "alice123",
-          "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBC"
+          "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
         );
       }).toThrow("Username already registered");
     });
@@ -161,7 +161,7 @@ describe("usernameService", () => {
       );
       usernameService.registerUsername(
         "bob456",
-        "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBC"
+        "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
       );
     });
 
@@ -176,7 +176,7 @@ describe("usernameService", () => {
     });
 
     it("returns empty array when no usernames are registered", () => {
-      usernameService.usernameMap.clear();
+      usernameService._clearForTesting();
       const result = usernameService.getAllUsernames();
 
       expect(result).toHaveLength(0);
@@ -281,7 +281,7 @@ describe("usernameService", () => {
         usernameService.validatePublicKey("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
       ).not.toThrow();
       expect(() =>
-        usernameService.validatePublicKey("GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBC")
+        usernameService.validatePublicKey("GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
       ).not.toThrow();
     });
 
@@ -299,7 +299,7 @@ describe("usernameService", () => {
         usernameService.validatePublicKey("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
       ).toThrow("Invalid Stellar public key format");
       expect(() =>
-        usernameService.validatePublicKey("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        usernameService.validatePublicKey("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
       ).toThrow("Invalid Stellar public key format");
     });
 

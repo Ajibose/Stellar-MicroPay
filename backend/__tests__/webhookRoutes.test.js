@@ -58,7 +58,7 @@ describe("POST /api/webhooks", () => {
 
     expect(res.status).toBe(201);
     expect(res.body.success).toBe(true);
-    expect(res.body.webhook.publicKey).toBe(ME);
+    expect(res.body.data.publicKey).toBe(ME);
     expect(webhookService.registerWebhook).toHaveBeenCalledWith(
       ME,
       "https://x.test/hook",
@@ -75,7 +75,7 @@ describe("GET /api/webhooks/:publicKey", () => {
 
     const res = await request(app()).get(`/api/webhooks/${ME}`);
     expect(res.status).toBe(200);
-    expect(res.body.webhooks).toHaveLength(1);
+    expect(res.body.data).toHaveLength(1);
   });
 });
 

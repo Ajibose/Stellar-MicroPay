@@ -93,6 +93,20 @@ function getFederationServerUrl(req) {
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
+app.set('trust proxy', true);
+
+// Enforce HTTPS in production (redirect HTTP to HTTPS)
+app.use((req, res, next) => {
+  if (process.env.NODE_ENV === 'production' && req.headers['x-forwarded-proto'] !== 'https' && req.protocol !== 'https') {
+    return res.redirect(`https://${req.get('host')}${req.originalUrl}`);
+  }
+  next();
+});
+
+// Remove the framework fingerprint header (helmet also does this, but disabling
+// at the Express level guarantees it even if helmet config changes).
+app.disable("x-powered-by");
+
 /**
  * Content-Security-Policy directives for this JSON API.
  *
@@ -151,10 +165,6 @@ const helmetOptions = {
   // Block Adobe cross-domain policy files.
   permittedCrossDomainPolicies: { permittedPolicies: "none" },
 };
-
-// Remove the framework fingerprint header (helmet also does this, but disabling
-// at the Express level guarantees it even if helmet config changes).
-app.disable("x-powered-by");
 
 app.use(helmet(helmetOptions));
 // gzip/brotli-negotiated response compression (#611) — shrinks JSON payloads

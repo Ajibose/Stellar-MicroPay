@@ -241,6 +241,10 @@ function getTopTippers(creatorPublicKey, limit = 5) {
 
   return result;
 }
+function _clearForTesting() {
+  tipsByCreator.clear();
+  tipIdCounter = 1;
+}
 
 module.exports = {
   recordTip,
@@ -249,4 +253,5 @@ module.exports = {
   getTipsSent,
   validateTipInput,
   getTopTippers,
+  _clearForTesting,
 };
