@@ -3,7 +3,7 @@
  * Displays paginated payment history for a Stellar account.
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/router";
 import {
   getPaymentHistory,
@@ -132,6 +132,8 @@ export default function TransactionList({
   const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const [stalePaymentsAt, setStalePaymentsAt] = useState<number | null>(null);
+  const [isMobile, setIsMobile] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
   const router = useRouter();
 
   const updatePayments = useCallback(
@@ -210,7 +212,42 @@ export default function TransactionList({
     fetchPayments();
   }, [fetchPayments]);
 
-  const handleLoadMore = () => fetchPayments(true);
+  const handleLoadMore = useCallback(() => fetchPayments(true), [fetchPayments]);
+
+  // Track the mobile breakpoint (<= 768px) so infinite scroll can replace
+  // the pagination button on small screens while desktop keeps the button.
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const mql = window.matchMedia("(max-width: 768px)");
+    const update = () => setIsMobile(mql.matches);
+    update();
+    mql.addEventListener?.("change", update);
+    return () => mql.removeEventListener?.("change", update);
+  }, []);
+
+  // Infinite scroll: observe a sentinel at the bottom of the list and load the
+  // next page as soon as it scrolls into view. Mobile only — desktop uses the
+  // pagination button fallback below.
+  useEffect(() => {
+    if (!isMobile || !hasMore || loading || loadingMore) return;
+
+    const node = sentinelRef.current;
+    if (!node || typeof IntersectionObserver === "undefined") return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          handleLoadMore();
+        }
+      },
+      { rootMargin: "0px 0px 120px 0px" }
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [isMobile, hasMore, loading, loadingMore, handleLoadMore]);
 
   const handleCopy = async (text: string, id: string) => {
     await copyToClipboard(text);
@@ -444,9 +481,23 @@ export default function TransactionList({
           </div>
         ))}
 
-        {/* Load more */}
-        {hasMore && payments.length > 0 && (
-          <div className="flex justify-center mt-4">
+        {/* Infinite-scroll sentinel (mobile) */}
+        {isMobile && hasMore && payments.length > 0 && (
+          <div
+            ref={sentinelRef}
+            className="flex justify-center py-4"
+            aria-live="polite"
+            aria-label="Loading more transactions"
+          >
+            {loadingMore && (
+              <div className="w-5 h-5 border-2 border-stellar-400 border-t-transparent rounded-full animate-spin" />
+            )}
+          </div>
+        )}
+
+        {/* Pagination fallback (desktop > 768px) */}
+        {!isMobile && hasMore && payments.length > 0 && (
+          <div className="hidden md:flex justify-center mt-4">
             <button
               onClick={handleLoadMore}
               disabled={loadingMore}
@@ -462,6 +513,13 @@ export default function TransactionList({
               )}
             </button>
           </div>
+        )}
+
+        {/* End of list */}
+        {!hasMore && payments.length > 0 && (
+          <p className="text-center text-xs text-slate-500 py-4">
+            All transactions loaded
+          </p>
         )}
       </div>
     </div>
