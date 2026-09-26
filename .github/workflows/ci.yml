@@ -11,19 +11,39 @@ permissions:
   contents: read
 
 jobs:
-  repository:
-    name: Repository integrity
+  lint:
+    name: Lint & typecheck
     runs-on: ubuntu-latest
+    needs: []
     steps:
       - uses: actions/checkout@v4
-      - name: Reject whitespace errors and unresolved conflicts
-        run: |
-          git diff --check HEAD^
-          ! git grep -n -E '^(<<<<<<<|=======|>>>>>>>)'
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            backend/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+      - name: ESLint (frontend)
+        run: npm run lint
+        working-directory: frontend
+      - name: ESLint (backend)
+        run: npm run lint
+        working-directory: backend
+      - name: TypeScript type check (tsc --noEmit)
+        run: npm run type-check
+        working-directory: frontend
 
-  frontend:
-    name: Frontend (typecheck, lint, test, build)
+  test-frontend:
+    name: Test (frontend)
     runs-on: ubuntu-latest
+    needs: []
     defaults:
       run:
         working-directory: frontend
@@ -35,19 +55,12 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-      - run: npm run type-check
-      - run: npm run lint
       - run: npm test
-      - name: Production build
-        run: npm run build
-        env:
-          NEXT_PUBLIC_STELLAR_NETWORK: testnet
-          NEXT_PUBLIC_HORIZON_URL: https://horizon-testnet.stellar.org
-          NEXT_PUBLIC_API_URL: http://localhost:4000
 
-  backend:
-    name: Backend (lint and test)
+  test-backend:
+    name: Test (backend)
     runs-on: ubuntu-latest
+    needs: []
     defaults:
       run:
         working-directory: backend
@@ -59,12 +72,57 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
-      - run: npm run lint
       - run: npm test
 
-  contracts:
-    name: Soroban contract (check, test, WASM)
+  test-contracts:
+    name: Test (Soroban contract)
     runs-on: ubuntu-latest
+    needs: []
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cargo test
+        run: cargo test
+        working-directory: contracts/stellar-micropay-contract
+
+  repository:
+    name: Repository integrity
+    runs-on: ubuntu-latest
+    needs: []
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject whitespace errors and unresolved conflicts
+        run: |
+          git diff --check HEAD^
+          ! git grep -n -E '^(<<<<<<<|=======|>>>>>>>)'
+
+  build-frontend:
+    name: Frontend production build
+    runs-on: ubuntu-latest
+    needs: []
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Production build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_STELLAR_NETWORK: testnet
+          NEXT_PUBLIC_HORIZON_URL: https://horizon-testnet.stellar.org
+          NEXT_PUBLIC_API_URL: http://localhost:4000
+
+  build-contracts:
+    name: Soroban contract (WASM build)
+    runs-on: ubuntu-latest
+    needs: []
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -72,7 +130,6 @@ jobs:
           targets: wasm32v1-none
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --target wasm32v1-none
-      - run: cargo test
       - run: cargo build --target wasm32v1-none --release
       - uses: actions/upload-artifact@v4
         with:
@@ -83,6 +140,7 @@ jobs:
   e2e:
     name: Browser smoke (Playwright)
     runs-on: ubuntu-latest
+    needs: []
     defaults:
       run:
         working-directory: frontend
