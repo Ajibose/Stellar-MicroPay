@@ -73,33 +73,6 @@ async function withTimeoutAndRetry(fn, timeoutMs = DEFAULT_TIMEOUT_MS) {
   throw lastErr;
 }
 
-/** @type {Map<string, { value: object, expiresAt: number }>} */
-const accountCache = new Map();
-
-function cacheGet(key) {
-  const entry = accountCache.get(key);
-  if (!entry) return null;
-  if (Date.now() > entry.expiresAt) {
-    accountCache.delete(key);
-    return null;
-  }
-  // LRU: re-insert to move to end
-  accountCache.delete(key);
-  accountCache.set(key, entry);
-  return entry.value;
-}
-
-function cacheSet(key, value) {
-  if (accountCache.size >= ACCOUNT_CACHE_MAX) {
-    // Evict the oldest entry (first key in insertion order)
-    accountCache.delete(accountCache.keys().next().value);
-  }
-  accountCache.set(key, { value, expiresAt: Date.now() + ACCOUNT_CACHE_TTL_MS });
-}
-
-function clearAccountCache() {
-  accountCache.clear();
-}
 const server = new Horizon.Server(HORIZON_URL);
 
 /** @type {Map<string, { value: object, expiresAt: number }>} */
@@ -335,7 +308,6 @@ module.exports = {
   getXLMBalance,
   getPayments,
   validatePublicKey,
-  clearAccountCache,
   clearStreaksCache,
   getAccountStreaks,
 };
