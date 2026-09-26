@@ -1,327 +1,151 @@
 #![no_std]
 
+/**
+ * contracts/stellar-micropay-contract/src/lib.rs
+ *
+ * Stellar MicroPay — Soroban Smart Contract
+ *
+ * Provides:
+ *   - Escrow payments (ROADMAP v2.1)
+ *   - Creator tipping (ROADMAP v1.4)
+ *   - Micro-transaction batching (ROADMAP v2.0)
+ *   - NFT payment receipts (ROADMAP v1.5)
+ *
+ * Build:
+ *   cargo build --target wasm32-unknown-unknown --release
+ *
+ * Deploy (Stellar CLI):
+ *   stellar contract deploy \
+ *     --wasm target/wasm32-unknown-unknown/release/stellar_micropay_contract.wasm \
+ *     --source YOUR_SECRET_KEY \
+ *     --network testnet
+ */
+
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol,
+    contract, contractimpl, contracttype,
+    token, Address, Env, Symbol,
 };
 
-#[contracterror]
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub enum ContractError {
-    AlreadyInitialized = 1,
-}
+// ─── Data types ───────────────────────────────────────────────────────────────
 
-const PERSISTENT_LIFETIME_THRESHOLD: u32 = 100_000;
-const PERSISTENT_BUMP_AMOUNT: u32 = 500_000;
-
-/// Storage schema version written by `initialize` and advanced by `migrate`.
-///
-/// Bump this whenever a stored struct (`Stream`, `Escrow`, …) or a `DataKey`
-/// variant changes shape, and add the corresponding step to the migration
-/// table in the contract README (#562).
-pub const SCHEMA_VERSION: u32 = 2;
-
-/// Smallest deposit `open_stream` accepts, in stroops (0.001 XLM against the
-/// native SAC).
-///
-/// Anything smaller is a dust stream: the per-claim token transfer and the
-/// storage rent for the `Stream` entry cost more than the stream can ever pay
-/// out (#561).
-pub const MIN_STREAM_DEPOSIT: i128 = 10_000;
-
-/// Smallest number of ledgers a stream must be funded for — `deposit /
-/// rate_per_ledger` — which is roughly five minutes at the ~5s Stellar ledger
-/// close time (#561).
-///
-/// This rejects the other flavour of dust: a deposit large enough on its own
-/// but paired with a rate that drains it in a handful of ledgers (or in zero
-/// ledgers, when `rate_per_ledger > deposit`).
-pub const MIN_STREAM_DURATION_LEDGERS: u32 = 60;
-
+/// A single tip event recorded on-chain.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct TipRecord {
+    /// The sender's Stellar address
     pub from: Address,
+    /// The recipient's Stellar address
     pub to: Address,
+    /// Amount in stroops (1 XLM = 10_000_000 stroops)
     pub amount: i128,
+    /// Ledger number when this tip was sent
     pub ledger: u32,
 }
 
+/// On-chain receipt metadata minted as proof of payment.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct ReceiptMetadata {
+    /// The payer's Stellar address
     pub from: Address,
+    /// The payee's Stellar address
     pub to: Address,
+    /// Amount in stroops (1 XLM = 10_000_000 stroops)
     pub amount: i128,
+    /// ISO-8601 timestamp of when the receipt was minted
     pub timestamp: u64,
+    /// Optional payment memo
     pub memo: Symbol,
+    /// Ledger number when this receipt was minted
     pub ledger: u32,
 }
 
+/// Storage key for per-recipient tip totals
 #[contracttype]
 pub enum DataKey {
     Admin,
     TipTotal(Address),
     TipCount(Address),
+    /// Latest tip record for a recipient (indexed by recipient + count)
     TipRecord(Address, u32),
+    /// Total receipt count for a payer
     ReceiptCount(Address),
+    /// Receipt record indexed by (payer, index)
     ReceiptRecord(Address, u32),
-    EscrowCount,
-    Escrow(u32),
-    StreamCount,
-    Stream(u32),
-    SchemaVersion,
 }
 
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub enum EscrowStatus {
-    Pending,
-    Released,
-    Cancelled,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct Escrow {
-    pub id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub token: Address,
-    pub amount: i128,
-    pub release_ledger: u32,
-    pub status: EscrowStatus,
-}
-
-/// One recipient's share of a stream's payout (#559).
-///
-/// `weight` is unit-less — a recipient's entitlement is
-/// `weight / sum(all weights on the stream)`. `claimed` is that recipient's
-/// own running total, which is what keeps per-recipient payouts independent
-/// of the order recipients claim in.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct StreamRecipient {
-    pub recipient: Address,
-    pub weight: u32,
-    pub claimed: i128,
-}
-
-/// A continuous payment channel: `payer` locks `deposited` up front and the
-/// stream accrues `rate_per_ledger` for every ledger it is running, split
-/// across `recipients` by weight (#559).
-///
-/// Accrual is derived, never stored — each recipient's `claimed` is the only
-/// mutable money field, which is what keeps `sum(claimed) <= deposited`
-/// checkable at any point (#557).
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct Stream {
-    pub payer: Address,
-    pub recipients: soroban_sdk::Vec<StreamRecipient>,
-    pub rate_per_ledger: i128,
-    pub deposited: i128,
-    pub start_ledger: u32,
-    /// Token contract the deposit is denominated in.
-    pub token: Address,
-    /// True while accrual is suspended by the payer (#560).
-    pub paused: bool,
-    /// Ledger the current pause started at; meaningless when `paused` is false.
-    pub paused_at_ledger: u32,
-    /// Ledgers spent in *completed* pauses, subtracted from the accrual window.
-    pub paused_ledgers: u32,
-    /// True once `close_stream` has settled and refunded the stream.
-    pub closed: bool,
-}
-
-/// Index of `recipients[i].recipient == addr`, if `addr` is on the stream.
-fn find_recipient(recipients: &soroban_sdk::Vec<StreamRecipient>, addr: &Address) -> Option<u32> {
-    for i in 0..recipients.len() {
-        if &recipients.get(i).unwrap().recipient == addr {
-            return Some(i);
-        }
-    }
-    None
-}
-
-fn total_weight(recipients: &soroban_sdk::Vec<StreamRecipient>) -> u32 {
-    let mut total: u32 = 0;
-    for i in 0..recipients.len() {
-        total = total.saturating_add(recipients.get(i).unwrap().weight);
-    }
-    total
-}
-
-fn total_claimed(recipients: &soroban_sdk::Vec<StreamRecipient>) -> i128 {
-    let mut total: i128 = 0;
-    for i in 0..recipients.len() {
-        total += recipients.get(i).unwrap().claimed;
-    }
-    total
-}
-
-/// Total ledgers this stream has spent paused, including an in-progress pause.
-fn paused_ledgers_total(stream: &Stream, current_ledger: u32) -> u32 {
-    if stream.paused {
-        let ongoing = current_ledger.saturating_sub(stream.paused_at_ledger);
-        stream.paused_ledgers.saturating_add(ongoing)
-    } else {
-        stream.paused_ledgers
-    }
-}
-
-/// Total amount streamed to *all* recipients combined, as of `current_ledger`.
-///
-/// Cap the accrual window at the ledger where the deposit runs out. That
-/// keeps the multiplication below bounded by `deposited` (so it can never
-/// overflow i128) and enforces `total_streamed <= deposited` structurally
-/// rather than by an after-the-fact clamp.
-fn total_streamed_amount(stream: &Stream, current_ledger: u32) -> i128 {
-    let paused = paused_ledgers_total(stream, current_ledger);
-    let elapsed_ledgers = current_ledger.saturating_sub(stream.start_ledger).saturating_sub(paused);
-
-    let funded_ledgers = stream.deposited / stream.rate_per_ledger;
-    let elapsed_ledgers = if i128::from(elapsed_ledgers) > funded_ledgers {
-        funded_ledgers as u32
-    } else {
-        elapsed_ledgers
-    };
-
-    stream.rate_per_ledger * elapsed_ledgers as i128
-}
-
-/// Amount `recipient` can withdraw right now: their weighted share of the
-/// total streamed so far, minus what they have already claimed (#559).
-///
-/// While a stream is paused the accrual window stops growing, so this stays
-/// flat until `resume_stream` — and after the resume it picks up exactly where
-/// it left off, because the pause length is folded into `paused_ledgers`.
-fn claimable_amount(stream: &Stream, recipient: &Address, current_ledger: u32) -> i128 {
-    if stream.closed {
-        return 0;
-    }
-    let Some(idx) = find_recipient(&stream.recipients, recipient) else {
-        return 0;
-    };
-    let entry = stream.recipients.get(idx).unwrap();
-
-    let total_streamed = total_streamed_amount(stream, current_ledger);
-    let weight_total = total_weight(&stream.recipients);
-    let entitled = total_streamed * i128::from(entry.weight) / i128::from(weight_total);
-
-    let claimable = entitled - entry.claimed;
-    if claimable > 0 {
-        claimable
-    } else {
-        0
-    }
-}
-
-fn load_stream(env: &Env, stream_id: u32) -> Stream {
-    env.storage()
-        .persistent()
-        .get(&DataKey::Stream(stream_id))
-        .expect("stream not found")
-}
-
-fn save_stream(env: &Env, stream_id: u32, stream: &Stream) {
-    let key = DataKey::Stream(stream_id);
-    env.storage().persistent().set(&key, stream);
-    env.storage().persistent().extend_ttl(
-        &key,
-        PERSISTENT_LIFETIME_THRESHOLD,
-        PERSISTENT_BUMP_AMOUNT,
-    );
-}
+// ─── Contract ─────────────────────────────────────────────────────────────────
 
 #[contract]
 pub struct MicroPayContract;
 
 #[contractimpl]
 impl MicroPayContract {
-    pub fn initialize(env: Env, admin: Address) -> Result<(), ContractError> {
-        if env.storage().persistent().has(&DataKey::Admin) {
-            return Err(ContractError::AlreadyInitialized);
+
+    // ─── Initialization ──────────────────────────────────────────────────────
+
+    /// Initialize the contract with an admin address.
+    /// Can only be called once.
+    pub fn initialize(env: Env, admin: Address) {
+        // Ensure not already initialized
+        if env.storage().instance().has(&DataKey::Admin) {
+            panic!("Contract already initialized");
         }
-        env.storage().persistent().set(&DataKey::Admin, &admin);
-        env.storage().persistent().extend_ttl(
-            &DataKey::Admin,
-            PERSISTENT_LIFETIME_THRESHOLD,
-            PERSISTENT_BUMP_AMOUNT,
-        );
-
-        // Stamp the storage layout a fresh deployment starts on, so `migrate`
-        // can tell an up-to-date instance from one that predates a schema
-        // change (#562).
-        env.storage()
-            .persistent()
-            .set(&DataKey::SchemaVersion, &SCHEMA_VERSION);
-        env.storage().persistent().extend_ttl(
-            &DataKey::SchemaVersion,
-            PERSISTENT_LIFETIME_THRESHOLD,
-            PERSISTENT_BUMP_AMOUNT,
-        );
-
-        // Emit an init event so off-chain indexers can detect an initialised
-        // contract without polling get_admin() (#258).
-        env.events().publish((Symbol::new(&env, "init"),), admin);
-        Ok(())
+        env.storage().instance().set(&DataKey::Admin, &admin);
     }
 
-    pub fn transfer_admin(env: Env, current_admin: Address, new_admin: Address) {
-        current_admin.require_auth();
-        let stored_admin: Address = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Admin)
-            .expect("Contract not initialized");
-        if current_admin != stored_admin {
-            panic!("Unauthorized");
-        }
-        env.storage().persistent().set(&DataKey::Admin, &new_admin);
-        env.storage().persistent().extend_ttl(
-            &DataKey::Admin,
-            PERSISTENT_LIFETIME_THRESHOLD,
-            PERSISTENT_BUMP_AMOUNT,
-        );
-    }
+    // ─── Tipping ─────────────────────────────────────────────────────────────
 
-    pub fn send_tip(env: Env, token_address: Address, from: Address, to: Address, amount: i128) {
+    /// Send a tip from `from` to `to` using a Stellar token.
+    ///
+    /// Parameters:
+    ///   - token_address: The SAC (Stellar Asset Contract) address for the token (e.g. XLM)
+    ///   - from:          The sender (must authorize this call)
+    ///   - to:            The recipient
+    ///   - amount:        Amount in the token's smallest unit (stroops for XLM)
+    ///
+    /// This records the tip on-chain for analytics and emits an event.
+    pub fn send_tip(
+        env: Env,
+        token_address: Address,
+        from: Address,
+        to: Address,
+        amount: i128,
+    ) {
+        // Require sender authorization
         from.require_auth();
+
+        // Validate amount
         if amount <= 0 {
             panic!("Tip amount must be positive");
         }
+
+        // Transfer tokens via the Stellar token interface (SAC)
         let token = token::Client::new(&env, &token_address);
         token.transfer(&from, &to, &amount);
 
+        // Update on-chain tip totals for the recipient
         let current_total: i128 = env
             .storage()
-            .persistent()
+            .instance()
             .get(&DataKey::TipTotal(to.clone()))
             .unwrap_or(0);
+
         let current_count: u32 = env
             .storage()
-            .persistent()
+            .instance()
             .get(&DataKey::TipCount(to.clone()))
             .unwrap_or(0);
 
         env.storage()
-            .persistent()
+            .instance()
             .set(&DataKey::TipTotal(to.clone()), &(current_total + amount));
-        env.storage().persistent().extend_ttl(
-            &DataKey::TipTotal(to.clone()),
-            PERSISTENT_LIFETIME_THRESHOLD,
-            PERSISTENT_BUMP_AMOUNT,
-        );
 
         env.storage()
-            .persistent()
+            .instance()
             .set(&DataKey::TipCount(to.clone()), &(current_count + 1));
-        env.storage().persistent().extend_ttl(
-            &DataKey::TipCount(to.clone()),
-            PERSISTENT_LIFETIME_THRESHOLD,
-            PERSISTENT_BUMP_AMOUNT,
-        );
 
+        // Store the tip record so it can be queried later
         let record = TipRecord {
             from: from.clone(),
             to: to.clone(),
@@ -329,84 +153,79 @@ impl MicroPayContract {
             ledger: env.ledger().sequence(),
         };
         env.storage()
-            .persistent()
+            .instance()
             .set(&DataKey::TipRecord(to.clone(), current_count), &record);
-        env.storage().persistent().extend_ttl(
-            &DataKey::TipRecord(to.clone(), current_count),
-            PERSISTENT_LIFETIME_THRESHOLD,
-            PERSISTENT_BUMP_AMOUNT,
-        );
 
-        // Clone `from` into the event tuple so the owned binding is not moved
-        // out before the borrow checker is done with it (#202).
-        env.events()
-            .publish((Symbol::new(&env, "tip"), from.clone(), to.clone()), amount);
+        // Emit an event for indexers
+        env.events().publish(
+            (Symbol::new(&env, "tip"), from, to.clone()),
+            amount,
+        );
     }
 
+    // ─── Getters ─────────────────────────────────────────────────────────────
+
+    /// Get the total amount tipped to a recipient (in stroops).
     pub fn get_tip_total(env: Env, recipient: Address) -> i128 {
-        let key = DataKey::TipTotal(recipient);
-        let val = env.storage().persistent().get(&key).unwrap_or(0);
-        if env.storage().persistent().has(&key) {
-            env.storage().persistent().extend_ttl(
-                &key,
-                PERSISTENT_LIFETIME_THRESHOLD,
-                PERSISTENT_BUMP_AMOUNT,
-            );
-        }
-        val
+        env.storage()
+            .instance()
+            .get(&DataKey::TipTotal(recipient))
+            .unwrap_or(0)
     }
 
+    /// Get the number of tips received by a recipient.
     pub fn get_tip_count(env: Env, recipient: Address) -> u32 {
-        let key = DataKey::TipCount(recipient);
-        let val = env.storage().persistent().get(&key).unwrap_or(0);
-        if env.storage().persistent().has(&key) {
-            env.storage().persistent().extend_ttl(
-                &key,
-                PERSISTENT_LIFETIME_THRESHOLD,
-                PERSISTENT_BUMP_AMOUNT,
-            );
-        }
-        val
+        env.storage()
+            .instance()
+            .get(&DataKey::TipCount(recipient))
+            .unwrap_or(0)
     }
 
+    /// Get the contract admin address.
     pub fn get_admin(env: Env) -> Address {
-        let key = DataKey::Admin;
-        let val: Address = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .expect("Contract not initialized");
-        env.storage().persistent().extend_ttl(
-            &key,
-            PERSISTENT_LIFETIME_THRESHOLD,
-            PERSISTENT_BUMP_AMOUNT,
-        );
-        val
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Contract not initialized")
     }
 
+    /// Get a specific tip record for a recipient by index.
     pub fn get_tip_record(env: Env, recipient: Address, index: u32) -> TipRecord {
-        let key = DataKey::TipRecord(recipient, index);
-        let val: TipRecord = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .expect("Tip record not found");
-        env.storage().persistent().extend_ttl(
-            &key,
-            PERSISTENT_LIFETIME_THRESHOLD,
-            PERSISTENT_BUMP_AMOUNT,
-        );
-        val
+        env.storage()
+            .instance()
+            .get(&DataKey::TipRecord(recipient, index))
+            .expect("Tip record not found")
     }
 
-    pub fn mint_receipt(env: Env, from: Address, to: Address, amount: i128, memo: Symbol) -> u32 {
+    // ─── NFT Receipts ───────────────────────────────────────────────────────
+
+    /// Mint an on-chain receipt as proof of payment.
+    ///
+    /// Stores receipt metadata (amount, timestamp, memo) under the payer's
+    /// address and emits a `receipt` event. The returned `u32` is the receipt
+    /// index (NFT ID) for this payer.
+    ///
+    /// Parameters:
+    ///   - from:   The payer (must authorize this call)
+    ///   - to:     The payee
+    ///   - amount: Amount in stroops
+    ///   - memo:   Optional payment memo (max 28 chars, passed as a Symbol)
+    pub fn mint_receipt(
+        env: Env,
+        from: Address,
+        to: Address,
+        amount: i128,
+        memo: Symbol,
+    ) -> u32 {
         from.require_auth();
+
         if amount <= 0 {
             panic!("Receipt amount must be positive");
         }
+
         let count: u32 = env
             .storage()
-            .persistent()
+            .instance()
             .get(&DataKey::ReceiptCount(from.clone()))
             .unwrap_or(0);
 
@@ -420,574 +239,75 @@ impl MicroPayContract {
         };
 
         env.storage()
-            .persistent()
+            .instance()
             .set(&DataKey::ReceiptRecord(from.clone(), count), &receipt);
-        env.storage().persistent().extend_ttl(
-            &DataKey::ReceiptRecord(from.clone(), count),
-            PERSISTENT_LIFETIME_THRESHOLD,
-            PERSISTENT_BUMP_AMOUNT,
-        );
 
         env.storage()
-            .persistent()
+            .instance()
             .set(&DataKey::ReceiptCount(from.clone()), &(count + 1));
-        env.storage().persistent().extend_ttl(
-            &DataKey::ReceiptCount(from.clone()),
-            PERSISTENT_LIFETIME_THRESHOLD,
-            PERSISTENT_BUMP_AMOUNT,
+
+        env.events().publish(
+            (Symbol::new(&env, "receipt"), from),
+            count,
         );
 
-        env.events()
-            .publish((Symbol::new(&env, "receipt"), from), count);
         count
     }
 
+    /// Get the total number of receipts minted for a payer.
     pub fn get_receipt_count(env: Env, payer: Address) -> u32 {
-        let key = DataKey::ReceiptCount(payer);
-        let val = env.storage().persistent().get(&key).unwrap_or(0);
-        if env.storage().persistent().has(&key) {
-            env.storage().persistent().extend_ttl(
-                &key,
-                PERSISTENT_LIFETIME_THRESHOLD,
-                PERSISTENT_BUMP_AMOUNT,
-            );
-        }
-        val
+        env.storage()
+            .instance()
+            .get(&DataKey::ReceiptCount(payer))
+            .unwrap_or(0)
     }
 
+    /// Get a specific receipt for a payer by index.
     pub fn get_receipt(env: Env, payer: Address, index: u32) -> ReceiptMetadata {
-        let key = DataKey::ReceiptRecord(payer, index);
-        let val: ReceiptMetadata = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .expect("Receipt not found");
-        env.storage().persistent().extend_ttl(
-            &key,
-            PERSISTENT_LIFETIME_THRESHOLD,
-            PERSISTENT_BUMP_AMOUNT,
-        );
-        val
+        env.storage()
+            .instance()
+            .get(&DataKey::ReceiptRecord(payer, index))
+            .expect("Receipt not found")
     }
 
+    // ─── Placeholders (future features) ──────────────────────────────────────
+
+    /// [PLACEHOLDER] Create an escrow payment that releases after a time lock.
+    /// See ROADMAP.md v2.1 — Soroban Escrow Payments.
+    ///
+    /// Future implementation:
+    ///   - Lock funds in the contract
+    ///   - Release to recipient after `release_ledger`
+    ///   - Allow sender to cancel before release
     pub fn create_escrow(
-        env: Env,
-        token_address: Address,
-        from: Address,
-        to: Address,
-        amount: i128,
-        release_ledger: u32,
-    ) -> u32 {
-        from.require_auth();
-        if amount <= 0 {
-            panic!("amount must be positive");
-        }
-        if release_ledger <= env.ledger().sequence() {
-            panic!("release_ledger must be in the future");
-        }
-
-        // Lock funds: transfer from creator into the contract itself.
-        let token = token::Client::new(&env, &token_address);
-        token.transfer(&from, &env.current_contract_address(), &amount);
-
-        let next_id: u32 = env.storage().persistent().get(&DataKey::EscrowCount).unwrap_or(0);
-        let escrow = Escrow {
-            id: next_id,
-            from: from.clone(),
-            to: to.clone(),
-            token: token_address,
-            amount,
-            release_ledger,
-            status: EscrowStatus::Pending,
-        };
-        env.storage().persistent().set(&DataKey::Escrow(next_id), &escrow);
-        env.storage().persistent().extend_ttl(&DataKey::Escrow(next_id), PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
-        env.storage().persistent().set(&DataKey::EscrowCount, &(next_id + 1));
-        env.storage().persistent().extend_ttl(&DataKey::EscrowCount, PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
-
-        env.events()
-            .publish((Symbol::new(&env, "escrow_create"), next_id), (from, to, amount, release_ledger));
-        next_id
-    }
-
-    pub fn claim_escrow(env: Env, id: u32) {
-        let mut escrow: Escrow = env.storage().persistent().get(&DataKey::Escrow(id)).expect("escrow not found");
-        if escrow.status != EscrowStatus::Pending {
-            panic!("escrow is not pending");
-        }
-        if env.ledger().sequence() < escrow.release_ledger {
-            panic!("release_ledger not reached");
-        }
-        // Only the recipient can claim.
-        escrow.to.require_auth();
-
-        let token = token::Client::new(&env, &escrow.token);
-        token.transfer(&env.current_contract_address(), &escrow.to, &escrow.amount);
-
-        escrow.status = EscrowStatus::Released;
-        env.storage().persistent().set(&DataKey::Escrow(id), &escrow);
-        env.storage().persistent().extend_ttl(&DataKey::Escrow(id), PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
-
-        env.events()
-            .publish((Symbol::new(&env, "escrow_claim"), id), (escrow.to, escrow.amount));
-    }
-
-    pub fn cancel_escrow(env: Env, id: u32) {
-        let mut escrow: Escrow = env.storage().persistent().get(&DataKey::Escrow(id)).expect("escrow not found");
-        if escrow.status != EscrowStatus::Pending {
-            panic!("escrow is not pending");
-        }
-        if env.ledger().sequence() >= escrow.release_ledger {
-            panic!("release_ledger already reached — cancellation is no longer allowed");
-        }
-        // Only the creator can cancel.
-        escrow.from.require_auth();
-
-        let token = token::Client::new(&env, &escrow.token);
-        token.transfer(&env.current_contract_address(), &escrow.from, &escrow.amount);
-
-        escrow.status = EscrowStatus::Cancelled;
-        env.storage().persistent().set(&DataKey::Escrow(id), &escrow);
-        env.storage().persistent().extend_ttl(&DataKey::Escrow(id), PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
-
-        env.events()
-            .publish((Symbol::new(&env, "escrow_cancel"), id), (escrow.from, escrow.amount));
-    }
-
-    pub fn get_escrow(env: Env, id: u32) -> Escrow {
-        let escrow: Escrow = env.storage().persistent().get(&DataKey::Escrow(id)).expect("escrow not found");
-        env.storage().persistent().extend_ttl(&DataKey::Escrow(id), PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
-        escrow
-    }
-
-    pub fn get_escrow_count(env: Env) -> u32 {
-        env.storage().persistent().get(&DataKey::EscrowCount).unwrap_or(0)
-    }
-
-    pub fn batch_send(
-        env: Env,
-        token_address: Address,
-        from: Address,
-        recipients: soroban_sdk::Vec<Address>,
-        amounts: soroban_sdk::Vec<i128>,
+        _env: Env,
+        _from: Address,
+        _to: Address,
+        _amount: i128,
+        _release_ledger: u32,
     ) {
-        from.require_auth();
-        if recipients.len() != amounts.len() {
-            panic!("arrays must have equal length");
-        }
-        let token = token::Client::new(&env, &token_address);
-        for i in 0..recipients.len() {
-            let to = recipients.get(i).unwrap();
-            let amount = amounts.get(i).unwrap();
-            if amount <= 0 {
-                panic!("amount must be positive");
-            }
-            token.transfer(&from, &to, &amount);
-
-            let current_total: i128 = env
-                .storage()
-                .persistent()
-                .get(&DataKey::TipTotal(to.clone()))
-                .unwrap_or(0);
-            let current_count: u32 = env
-                .storage()
-                .persistent()
-                .get(&DataKey::TipCount(to.clone()))
-                .unwrap_or(0);
-
-            env.storage()
-                .persistent()
-                .set(&DataKey::TipTotal(to.clone()), &(current_total + amount));
-            env.storage().persistent().extend_ttl(
-                &DataKey::TipTotal(to.clone()),
-                PERSISTENT_LIFETIME_THRESHOLD,
-                PERSISTENT_BUMP_AMOUNT,
-            );
-
-            env.storage()
-                .persistent()
-                .set(&DataKey::TipCount(to.clone()), &(current_count + 1));
-            env.storage().persistent().extend_ttl(
-                &DataKey::TipCount(to.clone()),
-                PERSISTENT_LIFETIME_THRESHOLD,
-                PERSISTENT_BUMP_AMOUNT,
-            );
-
-            let record = TipRecord {
-                from: from.clone(),
-                to: to.clone(),
-                amount,
-                ledger: env.ledger().sequence(),
-            };
-            env.storage()
-                .persistent()
-                .set(&DataKey::TipRecord(to.clone(), current_count), &record);
-            env.storage().persistent().extend_ttl(
-                &DataKey::TipRecord(to.clone(), current_count),
-                PERSISTENT_LIFETIME_THRESHOLD,
-                PERSISTENT_BUMP_AMOUNT,
-            );
-        }
+        panic!("Escrow payments coming in v2.1 — see ROADMAP.md");
     }
 
-    // ─── Streaming payments ─────────────────────────────────────────────────
-
-    /// Open a payment stream, locking `deposit` in the contract and splitting
-    /// its payout across `recipients` by the matching entry in `weights`
-    /// (#559). A single recipient is just a one-element list.
-    ///
-    /// Returns the new stream id. Rejects dust streams: the deposit must be at
-    /// least `MIN_STREAM_DEPOSIT` and must fund at least
-    /// `MIN_STREAM_DURATION_LEDGERS` ledgers at `rate_per_ledger` (#561).
-    pub fn open_stream(
-        env: Env,
-        token_address: Address,
-        payer: Address,
-        recipients: soroban_sdk::Vec<Address>,
-        weights: soroban_sdk::Vec<u32>,
-        rate_per_ledger: i128,
-        deposit: i128,
-    ) -> u32 {
-        payer.require_auth();
-        if recipients.len() != weights.len() {
-            panic!("recipients and weights must have equal length");
-        }
-        if recipients.is_empty() {
-            panic!("at least one recipient is required");
-        }
-        for i in 0..weights.len() {
-            if weights.get(i).unwrap() == 0 {
-                panic!("weight must be positive");
-            }
-        }
-        // A duplicated address would only ever be reachable through its first
-        // list entry — find_recipient() returns the first match — silently
-        // stranding the rest of that recipient's weight until close_stream.
-        for i in 0..recipients.len() {
-            for j in (i + 1)..recipients.len() {
-                if recipients.get(i).unwrap() == recipients.get(j).unwrap() {
-                    panic!("recipients must not contain duplicate addresses");
-                }
-            }
-        }
-        if rate_per_ledger <= 0 {
-            panic!("rate_per_ledger must be positive");
-        }
-        if deposit <= 0 {
-            panic!("deposit must be positive");
-        }
-        if deposit < MIN_STREAM_DEPOSIT {
-            panic!("deposit below minimum");
-        }
-        // Integer division, so a rate that drains the deposit in fewer than
-        // MIN_STREAM_DURATION_LEDGERS ledgers — including the degenerate
-        // rate > deposit case, which funds zero full ledgers — is rejected.
-        let funded_ledgers = deposit / rate_per_ledger;
-        if funded_ledgers < i128::from(MIN_STREAM_DURATION_LEDGERS) {
-            panic!("stream duration below minimum");
-        }
-
-        // Lock funds in the contract; claims and refunds are paid out of here.
-        let token = token::Client::new(&env, &token_address);
-        token.transfer(&payer, &env.current_contract_address(), &deposit);
-
-        let mut stream_recipients = soroban_sdk::Vec::new(&env);
-        for i in 0..recipients.len() {
-            stream_recipients.push_back(StreamRecipient {
-                recipient: recipients.get(i).unwrap(),
-                weight: weights.get(i).unwrap(),
-                claimed: 0,
-            });
-        }
-
-        let stream_id: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::StreamCount)
-            .unwrap_or(0);
-        let stream = Stream {
-            payer: payer.clone(),
-            recipients: stream_recipients,
-            rate_per_ledger,
-            deposited: deposit,
-            start_ledger: env.ledger().sequence(),
-            token: token_address,
-            paused: false,
-            paused_at_ledger: 0,
-            paused_ledgers: 0,
-            closed: false,
-        };
-        save_stream(&env, stream_id, &stream);
-        env.storage()
-            .persistent()
-            .set(&DataKey::StreamCount, &(stream_id + 1));
-        env.storage().persistent().extend_ttl(
-            &DataKey::StreamCount,
-            PERSISTENT_LIFETIME_THRESHOLD,
-            PERSISTENT_BUMP_AMOUNT,
-        );
-
-        env.events().publish(
-            (Symbol::new(&env, "stream_open"), stream_id),
-            (payer, recipients, weights, rate_per_ledger, deposit),
-        );
-        stream_id
-    }
-
-    /// Withdraw everything accrued so far for the calling recipient's weighted
-    /// share (#559). Returns the amount transferred, which is `0` when
-    /// nothing has accrued since that recipient's last claim.
-    pub fn claim_stream(env: Env, stream_id: u32, recipient: Address) -> i128 {
-        recipient.require_auth();
-        let mut stream = load_stream(&env, stream_id);
-        let Some(idx) = find_recipient(&stream.recipients, &recipient) else {
-            panic!("unauthorized");
-        };
-        if stream.closed {
-            panic!("stream is closed");
-        }
-
-        let amount = claimable_amount(&stream, &recipient, env.ledger().sequence());
-        if amount == 0 {
-            return 0;
-        }
-
-        let mut entry = stream.recipients.get(idx).unwrap();
-        entry.claimed += amount;
-        stream.recipients.set(idx, entry);
-        save_stream(&env, stream_id, &stream);
-
-        let token = token::Client::new(&env, &stream.token);
-        token.transfer(&env.current_contract_address(), &recipient, &amount);
-
-        env.events()
-            .publish((Symbol::new(&env, "stream_claim"), stream_id), (recipient, amount));
-        amount
-    }
-
-    /// Add funds to an open stream, extending how long it can run.
-    pub fn top_up_stream(env: Env, stream_id: u32, payer: Address, amount: i128) {
-        payer.require_auth();
-        let mut stream = load_stream(&env, stream_id);
-        if stream.payer != payer {
-            panic!("unauthorized");
-        }
-        if stream.closed {
-            panic!("stream is closed");
-        }
-        if amount <= 0 {
-            panic!("amount must be positive");
-        }
-
-        let token = token::Client::new(&env, &stream.token);
-        token.transfer(&payer, &env.current_contract_address(), &amount);
-
-        stream.deposited += amount;
-        save_stream(&env, stream_id, &stream);
-
-        env.events().publish(
-            (Symbol::new(&env, "stream_topup"), stream_id),
-            (payer, amount, stream.deposited),
-        );
-    }
-
-    /// Suspend accrual. Ledgers between here and `resume_stream` do not count
-    /// toward the claimable amount (#560).
-    pub fn pause_stream(env: Env, stream_id: u32, payer: Address) {
-        payer.require_auth();
-        let mut stream = load_stream(&env, stream_id);
-        if stream.payer != payer {
-            panic!("unauthorized");
-        }
-        if stream.closed {
-            panic!("stream is closed");
-        }
-        if stream.paused {
-            panic!("stream already paused");
-        }
-
-        stream.paused = true;
-        stream.paused_at_ledger = env.ledger().sequence();
-        save_stream(&env, stream_id, &stream);
-
-        env.events().publish(
-            (Symbol::new(&env, "stream_pause"), stream_id),
-            (payer, stream.paused_at_ledger),
-        );
-    }
-
-    /// Resume accrual from the point the stream was paused at (#560).
-    pub fn resume_stream(env: Env, stream_id: u32, payer: Address) {
-        payer.require_auth();
-        let mut stream = load_stream(&env, stream_id);
-        if stream.payer != payer {
-            panic!("unauthorized");
-        }
-        if stream.closed {
-            panic!("stream is closed");
-        }
-        if !stream.paused {
-            panic!("stream is not paused");
-        }
-
-        let current_ledger = env.ledger().sequence();
-        let pause_length = current_ledger.saturating_sub(stream.paused_at_ledger);
-        stream.paused_ledgers = stream.paused_ledgers.saturating_add(pause_length);
-        stream.paused = false;
-        stream.paused_at_ledger = 0;
-        save_stream(&env, stream_id, &stream);
-
-        env.events().publish(
-            (Symbol::new(&env, "stream_resume"), stream_id),
-            (payer, pause_length),
-        );
-    }
-
-    /// Stop a stream: settle everything accrued to each recipient by weight
-    /// (#559) and refund the unstreamed remainder to the payer.
-    pub fn close_stream(env: Env, stream_id: u32, payer: Address) {
-        payer.require_auth();
-        let mut stream = load_stream(&env, stream_id);
-        if stream.payer != payer {
-            panic!("unauthorized");
-        }
-        if stream.closed {
-            panic!("stream is closed");
-        }
-
-        let current_ledger = env.ledger().sequence();
-        let total_streamed = total_streamed_amount(&stream, current_ledger);
-        let weight_total = total_weight(&stream.recipients);
-
-        let token = token::Client::new(&env, &stream.token);
-        let contract_address = env.current_contract_address();
-
-        let mut recipients = stream.recipients.clone();
-        let mut owed: i128 = 0;
-        for i in 0..recipients.len() {
-            let mut entry = recipients.get(i).unwrap();
-            let entitled = total_streamed * i128::from(entry.weight) / i128::from(weight_total);
-            let share = entitled - entry.claimed;
-            if share > 0 {
-                entry.claimed += share;
-                owed += share;
-                recipients.set(i, entry.clone());
-                token.transfer(&contract_address, &entry.recipient, &share);
-            }
-        }
-        stream.recipients = recipients;
-
-        let refund = stream.deposited - total_claimed(&stream.recipients);
-        stream.closed = true;
-        stream.paused = false;
-        save_stream(&env, stream_id, &stream);
-
-        if refund > 0 {
-            token.transfer(&contract_address, &payer, &refund);
-        }
-
-        env.events()
-            .publish((Symbol::new(&env, "stream_close"), stream_id), (owed, refund));
-    }
-
-    pub fn get_stream(env: Env, stream_id: u32) -> Stream {
-        let stream = load_stream(&env, stream_id);
-        env.storage().persistent().extend_ttl(
-            &DataKey::Stream(stream_id),
-            PERSISTENT_LIFETIME_THRESHOLD,
-            PERSISTENT_BUMP_AMOUNT,
-        );
-        stream
-    }
-
-    /// Amount `recipient` could withdraw from `stream_id` at the current
-    /// ledger — their weighted share of accrual, net of paused time and
-    /// capped at the deposit. `0` for a closed stream or an address that is
-    /// not one of the stream's recipients.
-    pub fn get_claimable(env: Env, stream_id: u32, recipient: Address) -> i128 {
-        let stream = load_stream(&env, stream_id);
-        claimable_amount(&stream, &recipient, env.ledger().sequence())
-    }
-
-    pub fn get_stream_count(env: Env) -> u32 {
-        env.storage()
-            .persistent()
-            .get(&DataKey::StreamCount)
-            .unwrap_or(0)
-    }
-
-    // ─── Schema versioning ──────────────────────────────────────────────────
-
-    /// Storage schema version this instance's data is laid out for.
-    ///
-    /// Returns `0` for instances deployed before versioning existed — those
-    /// need a `migrate` call (#562).
-    pub fn get_schema_version(env: Env) -> u32 {
-        env.storage()
-            .persistent()
-            .get(&DataKey::SchemaVersion)
-            .unwrap_or(0)
-    }
-
-    /// Record that this instance's storage now matches `SCHEMA_VERSION`.
-    ///
-    /// Run by the admin immediately after a WASM upgrade, once any data
-    /// rewrite the release notes call for has been applied. Returns the
-    /// version migrated to. See the migration guide in the contract README
-    /// for the full procedure (#562).
-    pub fn migrate(env: Env, admin: Address) -> u32 {
-        admin.require_auth();
-        let stored_admin: Address = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Admin)
-            .expect("Contract not initialized");
-        if admin != stored_admin {
-            panic!("Unauthorized");
-        }
-
-        let from_version: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::SchemaVersion)
-            .unwrap_or(0);
-        if from_version == SCHEMA_VERSION {
-            panic!("schema already at current version");
-        }
-        if from_version > SCHEMA_VERSION {
-            panic!("stored schema is newer than this contract");
-        }
-
-        env.storage()
-            .persistent()
-            .set(&DataKey::SchemaVersion, &SCHEMA_VERSION);
-        env.storage().persistent().extend_ttl(
-            &DataKey::SchemaVersion,
-            PERSISTENT_LIFETIME_THRESHOLD,
-            PERSISTENT_BUMP_AMOUNT,
-        );
-
-        env.events().publish(
-            (Symbol::new(&env, "migrate"),),
-            (from_version, SCHEMA_VERSION),
-        );
-        SCHEMA_VERSION
+    /// [PLACEHOLDER] Batch multiple micro-payments in a single transaction.
+    /// See ROADMAP.md v2.0 — Multi-Currency Payments.
+    pub fn batch_send(
+        _env: Env,
+        _from: Address,
+        _recipients: soroban_sdk::Vec<Address>,
+        _amounts: soroban_sdk::Vec<i128>,
+    ) {
+        panic!("Batch payments coming in v2.0 — see ROADMAP.md");
     }
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod benchmarks;
-
-#[cfg(test)]
-mod fuzz_streams;
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use soroban_sdk::{
-        testutils::{Address as _, Ledger as _},
+        testutils::{Address as _, AuthorizedFunction, AuthorizedInvocation},
         Address, Env,
     };
 
@@ -1004,47 +324,15 @@ mod tests {
     }
 
     #[test]
-    fn test_initialize_emits_init_event() {
-        use soroban_sdk::{testutils::Events, vec, IntoVal};
-
+    #[should_panic(expected = "Contract already initialized")]
+    fn test_double_initialize_fails() {
         let env = Env::default();
         let contract_id = env.register_contract(None, MicroPayContract);
         let client = MicroPayContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
         client.initialize(&admin);
-
-        // initialize() should publish exactly one event: (init,) -> admin.
-        assert_eq!(
-            env.events().all(),
-            vec![
-                &env,
-                (
-                    contract_id.clone(),
-                    (Symbol::new(&env, "init"),).into_val(&env),
-                    admin.into_val(&env),
-                ),
-            ]
-        );
-    }
-
-    /// Issue #200 — initialize() must return Err(AlreadyInitialized) on re-init,
-    /// not panic. try_initialize is testable without aborting the harness.
-    #[test]
-    fn test_double_initialize_returns_error() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, MicroPayContract);
-        let client = MicroPayContractClient::new(&env, &contract_id);
-
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let result = client.try_initialize(&admin);
-        assert!(result.is_err(), "second initialize() must return an error");
-        assert_eq!(
-            result.unwrap_err().unwrap(),
-            ContractError::AlreadyInitialized,
-        );
+        client.initialize(&admin); // should panic
     }
 
     #[test]
@@ -1109,1121 +397,5 @@ mod tests {
         let recipient = Address::generate(&env);
         assert_eq!(client.get_tip_total(&recipient), 0);
         assert_eq!(client.get_tip_count(&recipient), 0);
-    }
-
-    // ── Helper: deploy a SAC token, mint `amount` to `to`, return token address ──
-    fn create_token(env: &Env, admin: &Address, to: &Address, amount: i128) -> Address {
-        let token_id = env.register_stellar_asset_contract(admin.clone());
-        let sac = token::StellarAssetClient::new(env, &token_id);
-        sac.mint(to, &amount);
-        token_id
-    }
-
-    #[test]
-    fn test_send_tip_stores_record() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, MicroPayContract);
-        let client = MicroPayContractClient::new(&env, &contract_id);
-
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let from = Address::generate(&env);
-        let to = Address::generate(&env);
-        let amount: i128 = 500;
-
-        env.mock_all_auths();
-        let token_id = create_token(&env, &admin, &from, amount);
-        client.send_tip(&token_id, &from, &to, &amount);
-
-        let record = client.get_tip_record(&to, &0);
-        assert_eq!(record.from, from);
-        assert_eq!(record.to, to);
-        assert_eq!(record.amount, amount);
-        assert_eq!(record.ledger, env.ledger().sequence());
-    }
-
-    #[test]
-    fn test_send_tip_increments_totals() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, MicroPayContract);
-        let client = MicroPayContractClient::new(&env, &contract_id);
-
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let from = Address::generate(&env);
-        let to = Address::generate(&env);
-        let first_amount: i128 = 300;
-        let second_amount: i128 = 700;
-
-        env.mock_all_auths();
-        let token_id = create_token(&env, &admin, &from, first_amount + second_amount);
-        client.send_tip(&token_id, &from, &to, &first_amount);
-        client.send_tip(&token_id, &from, &to, &second_amount);
-
-        assert_eq!(client.get_tip_total(&to), first_amount + second_amount);
-        assert_eq!(client.get_tip_count(&to), 2);
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_send_tip_unauthorized() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, MicroPayContract);
-        let client = MicroPayContractClient::new(&env, &contract_id);
-
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let from = Address::generate(&env);
-        let to = Address::generate(&env);
-        let amount: i128 = 100;
-
-        // Mint tokens to `from` but do NOT call env.mock_all_auths(),
-        // so from.require_auth() inside send_tip will fail.
-        env.mock_all_auths();
-        let token_id = create_token(&env, &admin, &from, amount);
-        // Clear mocked auths so the send_tip call is not authorized.
-        env.set_auths(&[]);
-
-        client.send_tip(&token_id, &from, &to, &amount);
-    }
-
-    // ── Escrow tests ────────────────────────────────────────────────────────
-
-    fn advance_ledger(env: &Env, to_sequence: u32) {
-        env.ledger().with_mut(|info| {
-            info.sequence_number = to_sequence;
-        });
-    }
-
-    #[test]
-    fn test_create_escrow_locks_funds_and_returns_id() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, MicroPayContract);
-        let client = MicroPayContractClient::new(&env, &contract_id);
-
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let from = Address::generate(&env);
-        let to = Address::generate(&env);
-        let amount: i128 = 1_000;
-
-        env.mock_all_auths();
-        let token_id = create_token(&env, &admin, &from, amount);
-        let token = token::Client::new(&env, &token_id);
-        let release_ledger = env.ledger().sequence() + 100;
-
-        let id = client.create_escrow(&token_id, &from, &to, &amount, &release_ledger);
-        assert_eq!(id, 0);
-        assert_eq!(client.get_escrow_count(), 1);
-
-        // Funds moved into the contract, not the recipient.
-        assert_eq!(token.balance(&from), 0);
-        assert_eq!(token.balance(&contract_id), amount);
-        assert_eq!(token.balance(&to), 0);
-
-        let escrow = client.get_escrow(&id);
-        assert_eq!(escrow.amount, amount);
-        assert_eq!(escrow.status, EscrowStatus::Pending);
-    }
-
-    #[test]
-    #[should_panic(expected = "release_ledger must be in the future")]
-    fn test_create_escrow_rejects_past_release_ledger() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, MicroPayContract);
-        let client = MicroPayContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let from = Address::generate(&env);
-        let to = Address::generate(&env);
-        env.mock_all_auths();
-        let token_id = create_token(&env, &admin, &from, 100);
-
-        // release_ledger == current sequence is not "in the future".
-        let now = env.ledger().sequence();
-        client.create_escrow(&token_id, &from, &to, &100, &now);
-    }
-
-    #[test]
-    #[should_panic(expected = "amount must be positive")]
-    fn test_create_escrow_rejects_non_positive_amount() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, MicroPayContract);
-        let client = MicroPayContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let from = Address::generate(&env);
-        let to = Address::generate(&env);
-        env.mock_all_auths();
-        let token_id = create_token(&env, &admin, &from, 100);
-        let release = env.ledger().sequence() + 50;
-        client.create_escrow(&token_id, &from, &to, &0i128, &release);
-    }
-
-    #[test]
-    fn test_claim_escrow_transfers_to_recipient_after_release() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, MicroPayContract);
-        let client = MicroPayContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let from = Address::generate(&env);
-        let to = Address::generate(&env);
-        let amount: i128 = 500;
-        env.mock_all_auths();
-        let token_id = create_token(&env, &admin, &from, amount);
-        let token = token::Client::new(&env, &token_id);
-
-        let release_ledger = env.ledger().sequence() + 10;
-        let id = client.create_escrow(&token_id, &from, &to, &amount, &release_ledger);
-
-        // Fast-forward past release.
-        advance_ledger(&env, release_ledger + 1);
-        client.claim_escrow(&id);
-
-        assert_eq!(token.balance(&to), amount);
-        assert_eq!(token.balance(&contract_id), 0);
-        assert_eq!(client.get_escrow(&id).status, EscrowStatus::Released);
-    }
-
-    #[test]
-    #[should_panic(expected = "release_ledger not reached")]
-    fn test_claim_escrow_rejected_before_release_ledger() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, MicroPayContract);
-        let client = MicroPayContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let from = Address::generate(&env);
-        let to = Address::generate(&env);
-        env.mock_all_auths();
-        let token_id = create_token(&env, &admin, &from, 100);
-        let release = env.ledger().sequence() + 50;
-        let id = client.create_escrow(&token_id, &from, &to, &100, &release);
-        client.claim_escrow(&id);
-    }
-
-    #[test]
-    fn test_cancel_escrow_returns_funds_to_creator() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, MicroPayContract);
-        let client = MicroPayContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let from = Address::generate(&env);
-        let to = Address::generate(&env);
-        let amount: i128 = 750;
-        env.mock_all_auths();
-        let token_id = create_token(&env, &admin, &from, amount);
-        let token = token::Client::new(&env, &token_id);
-
-        let release = env.ledger().sequence() + 100;
-        let id = client.create_escrow(&token_id, &from, &to, &amount, &release);
-
-        // Still before release_ledger.
-        client.cancel_escrow(&id);
-
-        assert_eq!(token.balance(&from), amount);
-        assert_eq!(token.balance(&contract_id), 0);
-        assert_eq!(token.balance(&to), 0);
-        assert_eq!(client.get_escrow(&id).status, EscrowStatus::Cancelled);
-    }
-
-    #[test]
-    #[should_panic(expected = "release_ledger already reached")]
-    fn test_cancel_escrow_rejected_after_release_ledger() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, MicroPayContract);
-        let client = MicroPayContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let from = Address::generate(&env);
-        let to = Address::generate(&env);
-        env.mock_all_auths();
-        let token_id = create_token(&env, &admin, &from, 100);
-        let release = env.ledger().sequence() + 5;
-        let id = client.create_escrow(&token_id, &from, &to, &100, &release);
-        advance_ledger(&env, release + 1);
-        client.cancel_escrow(&id);
-    }
-
-    #[test]
-    #[should_panic(expected = "escrow is not pending")]
-    fn test_double_claim_rejected() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, MicroPayContract);
-        let client = MicroPayContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let from = Address::generate(&env);
-        let to = Address::generate(&env);
-        env.mock_all_auths();
-        let token_id = create_token(&env, &admin, &from, 100);
-        let release = env.ledger().sequence() + 5;
-        let id = client.create_escrow(&token_id, &from, &to, &100, &release);
-        advance_ledger(&env, release + 1);
-        client.claim_escrow(&id);
-        client.claim_escrow(&id);
-    }
-
-    // ── Streaming payment tests ─────────────────────────────────────────────
-
-    const RATE: i128 = 100;
-    const DEPOSIT: i128 = 100_000; // 1_000 ledgers of runway at RATE.
-
-    fn advance_by(env: &Env, ledgers: u32) {
-        let target = env.ledger().sequence() + ledgers;
-        advance_ledger(env, target);
-    }
-
-    /// Deploy the contract, mint `funding` to a fresh payer and return
-    /// everything a stream test needs.
-    fn stream_fixture(
-        env: &Env,
-        funding: i128,
-    ) -> (Address, MicroPayContractClient<'_>, Address, Address, Address) {
-        let contract_id = env.register_contract(None, MicroPayContract);
-        let client = MicroPayContractClient::new(env, &contract_id);
-        let admin = Address::generate(env);
-        client.initialize(&admin);
-
-        let payer = Address::generate(env);
-        let recipient = Address::generate(env);
-        env.mock_all_auths();
-        let token_id = create_token(env, &admin, &payer, funding);
-
-        (contract_id, client, token_id, payer, recipient)
-    }
-
-    /// Open a stream with a single recipient holding the entire weight — the
-    /// pre-#559 API shape, kept as a helper so the bulk of these tests do not
-    /// need to build a `(recipients, weights)` pair by hand.
-    fn open_single_stream(
-        env: &Env,
-        client: &MicroPayContractClient,
-        token_id: &Address,
-        payer: &Address,
-        recipient: &Address,
-        rate_per_ledger: i128,
-        deposit: i128,
-    ) -> u32 {
-        client.open_stream(
-            token_id,
-            payer,
-            &soroban_sdk::vec![env, recipient.clone()],
-            &soroban_sdk::vec![env, 1u32],
-            &rate_per_ledger,
-            &deposit,
-        )
-    }
-
-    /// The sole recipient's claimed amount on a single-recipient stream.
-    fn claimed_of(stream: &Stream) -> i128 {
-        stream.recipients.get(0).unwrap().claimed
-    }
-
-    #[test]
-    fn test_open_stream() {
-        let env = Env::default();
-        let (contract_id, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        let token = token::Client::new(&env, &token_id);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-
-        assert_eq!(id, 0);
-        assert_eq!(client.get_stream_count(), 1);
-
-        // The deposit is locked in the contract, not forwarded to the recipient.
-        assert_eq!(token.balance(&payer), 0);
-        assert_eq!(token.balance(&contract_id), DEPOSIT);
-        assert_eq!(token.balance(&recipient), 0);
-
-        let stream = client.get_stream(&id);
-        assert_eq!(stream.payer, payer);
-        assert_eq!(stream.recipients.len(), 1);
-        assert_eq!(stream.recipients.get(0).unwrap().recipient, recipient);
-        assert_eq!(stream.recipients.get(0).unwrap().weight, 1);
-        assert_eq!(stream.rate_per_ledger, RATE);
-        assert_eq!(stream.deposited, DEPOSIT);
-        assert_eq!(claimed_of(&stream), 0);
-        assert_eq!(stream.start_ledger, env.ledger().sequence());
-        assert!(!stream.paused);
-        assert!(!stream.closed);
-    }
-
-    #[test]
-    fn test_claim_stream_basic() {
-        let env = Env::default();
-        let (contract_id, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        let token = token::Client::new(&env, &token_id);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-        advance_by(&env, 10);
-
-        let claimed = client.claim_stream(&id, &recipient);
-
-        assert_eq!(claimed, RATE * 10);
-        assert_eq!(token.balance(&recipient), RATE * 10);
-        assert_eq!(token.balance(&contract_id), DEPOSIT - RATE * 10);
-        assert_eq!(claimed_of(&client.get_stream(&id)), RATE * 10);
-    }
-
-    #[test]
-    fn test_claim_stream_multiple_times() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        let token = token::Client::new(&env, &token_id);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-
-        advance_by(&env, 5);
-        assert_eq!(client.claim_stream(&id, &recipient), RATE * 5);
-        advance_by(&env, 7);
-        assert_eq!(client.claim_stream(&id, &recipient), RATE * 7);
-
-        // A claim with no ledgers in between accrues nothing and is a no-op.
-        assert_eq!(client.claim_stream(&id, &recipient), 0);
-
-        assert_eq!(token.balance(&recipient), RATE * 12);
-        assert_eq!(claimed_of(&client.get_stream(&id)), RATE * 12);
-    }
-
-    #[test]
-    fn test_claim_stream_exceeds_deposit() {
-        let env = Env::default();
-        let (contract_id, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        let token = token::Client::new(&env, &token_id);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-
-        // Run far past the funded window: accrual stops at the deposit.
-        advance_by(&env, 10_000);
-
-        assert_eq!(client.get_claimable(&id, &recipient), DEPOSIT);
-        assert_eq!(client.claim_stream(&id, &recipient), DEPOSIT);
-        assert_eq!(client.claim_stream(&id, &recipient), 0);
-        assert_eq!(token.balance(&recipient), DEPOSIT);
-        assert_eq!(token.balance(&contract_id), 0);
-
-        let stream = client.get_stream(&id);
-        assert_eq!(claimed_of(&stream), stream.deposited);
-    }
-
-    #[test]
-    fn test_top_up_stream() {
-        let env = Env::default();
-        let (contract_id, client, token_id, payer, recipient) =
-            stream_fixture(&env, DEPOSIT * 2);
-        let token = token::Client::new(&env, &token_id);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-        advance_by(&env, 1_000); // Drain the original runway exactly.
-        assert_eq!(client.get_claimable(&id, &recipient), DEPOSIT);
-
-        client.top_up_stream(&id, &payer, &DEPOSIT);
-
-        assert_eq!(client.get_stream(&id).deposited, DEPOSIT * 2);
-        assert_eq!(token.balance(&contract_id), DEPOSIT * 2);
-
-        // The top-up extends the runway rather than paying out immediately.
-        assert_eq!(client.get_claimable(&id, &recipient), DEPOSIT);
-        advance_by(&env, 10);
-        assert_eq!(client.get_claimable(&id, &recipient), DEPOSIT + RATE * 10);
-    }
-
-    #[test]
-    fn test_close_stream_with_refund() {
-        let env = Env::default();
-        let (contract_id, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        let token = token::Client::new(&env, &token_id);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-        advance_by(&env, 20);
-        client.close_stream(&id, &payer);
-
-        let streamed = RATE * 20;
-        assert_eq!(token.balance(&recipient), streamed);
-        assert_eq!(token.balance(&payer), DEPOSIT - streamed);
-        assert_eq!(token.balance(&contract_id), 0);
-
-        let stream = client.get_stream(&id);
-        assert!(stream.closed);
-        assert_eq!(claimed_of(&stream), streamed);
-        assert_eq!(client.get_claimable(&id, &recipient), 0);
-    }
-
-    /// #558 — close_stream must emit an event carrying the stream id and the
-    /// refunded amount, not just return them, so off-chain indexers can track
-    /// closures without polling.
-    #[test]
-    fn test_close_stream_emits_event_with_refund() {
-        use soroban_sdk::{testutils::Events, vec, IntoVal};
-
-        let env = Env::default();
-        let (contract_id, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-        advance_by(&env, 20);
-        client.close_stream(&id, &payer);
-
-        let streamed = RATE * 20;
-        let refund = DEPOSIT - streamed;
-
-        // close_stream also triggers token-contract transfer events, so check
-        // just the last published event (ours) rather than the full list.
-        let all_events = env.events().all();
-        let last_event = all_events.slice(all_events.len() - 1..);
-        assert_eq!(
-            last_event,
-            vec![
-                &env,
-                (
-                    contract_id,
-                    (Symbol::new(&env, "stream_close"), id).into_val(&env),
-                    (streamed, refund).into_val(&env),
-                ),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_close_stream_after_claims() {
-        let env = Env::default();
-        let (contract_id, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        let token = token::Client::new(&env, &token_id);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-        advance_by(&env, 30);
-        client.claim_stream(&id, &recipient);
-        advance_by(&env, 20);
-        client.close_stream(&id, &payer);
-
-        // Claimed portions are not paid twice: the recipient ends up with the
-        // full 50 ledgers of accrual and the payer with the rest.
-        let streamed = RATE * 50;
-        assert_eq!(token.balance(&recipient), streamed);
-        assert_eq!(token.balance(&payer), DEPOSIT - streamed);
-        assert_eq!(token.balance(&contract_id), 0);
-        assert_eq!(claimed_of(&client.get_stream(&id)), streamed);
-    }
-
-    #[test]
-    fn test_get_claimable() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-        assert_eq!(client.get_claimable(&id, &recipient), 0);
-
-        advance_by(&env, 3);
-        assert_eq!(client.get_claimable(&id, &recipient), RATE * 3);
-
-        client.claim_stream(&id, &recipient);
-        assert_eq!(client.get_claimable(&id, &recipient), 0);
-    }
-
-    #[test]
-    #[should_panic(expected = "stream not found")]
-    fn test_claim_nonexistent_stream() {
-        let env = Env::default();
-        let (_, client, _, _, recipient) = stream_fixture(&env, DEPOSIT);
-        client.claim_stream(&42, &recipient);
-    }
-
-    #[test]
-    #[should_panic(expected = "unauthorized")]
-    fn test_unauthorized_claim() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-        advance_by(&env, 10);
-
-        let stranger = Address::generate(&env);
-        client.claim_stream(&id, &stranger);
-    }
-
-    #[test]
-    #[should_panic(expected = "unauthorized")]
-    fn test_unauthorized_close() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-
-        let stranger = Address::generate(&env);
-        client.close_stream(&id, &stranger);
-    }
-
-    #[test]
-    #[should_panic(expected = "rate_per_ledger must be positive")]
-    fn test_invalid_rate() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        open_single_stream(&env, &client, &token_id, &payer, &recipient, 0i128, DEPOSIT);
-    }
-
-    #[test]
-    #[should_panic(expected = "deposit must be positive")]
-    fn test_invalid_deposit() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, 0i128);
-    }
-
-    // ── Dust-stream validation (#561) ───────────────────────────────────────
-
-    #[test]
-    #[should_panic(expected = "deposit below minimum")]
-    fn test_open_stream_rejects_dust_deposit() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        let dust = MIN_STREAM_DEPOSIT - 1;
-        open_single_stream(&env, &client, &token_id, &payer, &recipient, 1i128, dust);
-    }
-
-    #[test]
-    #[should_panic(expected = "stream duration below minimum")]
-    fn test_open_stream_rejects_short_duration() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        // Deposit clears the minimum, but this rate drains it in 10 ledgers.
-        open_single_stream(&env, &client, &token_id, &payer, &recipient, 1_000i128, 10_000i128);
-    }
-
-    #[test]
-    #[should_panic(expected = "stream duration below minimum")]
-    fn test_open_stream_rejects_zero_ledger_duration() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        // rate > deposit funds zero whole ledgers.
-        open_single_stream(&env, &client, &token_id, &payer, &recipient, 20_000i128, 10_000i128);
-    }
-
-    #[test]
-    fn test_open_stream_accepts_exact_minimums() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, MIN_STREAM_DEPOSIT);
-        // 10_000 / 166 == 60 ledgers, exactly MIN_STREAM_DURATION_LEDGERS.
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, 166i128, MIN_STREAM_DEPOSIT);
-        assert_eq!(client.get_stream(&id).deposited, MIN_STREAM_DEPOSIT);
-    }
-
-    // ── Multi-recipient streams (#559) ──────────────────────────────────────
-
-    #[test]
-    fn test_open_stream_multiple_recipients_records_shares() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        let second = Address::generate(&env);
-
-        let id = client.open_stream(
-            &token_id,
-            &payer,
-            &soroban_sdk::vec![&env, recipient.clone(), second.clone()],
-            &soroban_sdk::vec![&env, 1u32, 3u32],
-            &RATE,
-            &DEPOSIT,
-        );
-
-        let stream = client.get_stream(&id);
-        assert_eq!(stream.recipients.len(), 2);
-        assert_eq!(stream.recipients.get(0).unwrap().recipient, recipient);
-        assert_eq!(stream.recipients.get(0).unwrap().weight, 1);
-        assert_eq!(stream.recipients.get(1).unwrap().recipient, second);
-        assert_eq!(stream.recipients.get(1).unwrap().weight, 3);
-    }
-
-    #[test]
-    fn test_claim_stream_multiple_recipients_pays_proportionally() {
-        let env = Env::default();
-        let (contract_id, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        let token = token::Client::new(&env, &token_id);
-        let second = Address::generate(&env);
-
-        // Weights 1:3 — `recipient` gets a quarter of accrual, `second` gets
-        // three quarters.
-        let id = client.open_stream(
-            &token_id,
-            &payer,
-            &soroban_sdk::vec![&env, recipient.clone(), second.clone()],
-            &soroban_sdk::vec![&env, 1u32, 3u32],
-            &RATE,
-            &DEPOSIT,
-        );
-        advance_by(&env, 40);
-
-        assert_eq!(client.get_claimable(&id, &recipient), RATE * 40 / 4);
-        assert_eq!(client.get_claimable(&id, &second), RATE * 40 * 3 / 4);
-
-        assert_eq!(client.claim_stream(&id, &recipient), RATE * 40 / 4);
-        assert_eq!(client.claim_stream(&id, &second), RATE * 40 * 3 / 4);
-        assert_eq!(token.balance(&recipient), RATE * 40 / 4);
-        assert_eq!(token.balance(&second), RATE * 40 * 3 / 4);
-        assert_eq!(token.balance(&contract_id), DEPOSIT - RATE * 40);
-
-        // A second claim with no new accrual pays nothing, for either party.
-        assert_eq!(client.claim_stream(&id, &recipient), 0);
-        assert_eq!(client.claim_stream(&id, &second), 0);
-    }
-
-    #[test]
-    fn test_close_stream_multiple_recipients_settles_each() {
-        let env = Env::default();
-        let (contract_id, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        let token = token::Client::new(&env, &token_id);
-        let second = Address::generate(&env);
-
-        let id = client.open_stream(
-            &token_id,
-            &payer,
-            &soroban_sdk::vec![&env, recipient.clone(), second.clone()],
-            &soroban_sdk::vec![&env, 1u32, 1u32],
-            &RATE,
-            &DEPOSIT,
-        );
-        advance_by(&env, 30);
-        // recipient claims their half early; second never claims.
-        client.claim_stream(&id, &recipient);
-        advance_by(&env, 20);
-        client.close_stream(&id, &payer);
-
-        let streamed = RATE * 50;
-        assert_eq!(token.balance(&recipient), streamed / 2);
-        assert_eq!(token.balance(&second), streamed / 2);
-        assert_eq!(token.balance(&payer), DEPOSIT - streamed);
-        assert_eq!(token.balance(&contract_id), 0);
-    }
-
-    #[test]
-    #[should_panic(expected = "unauthorized")]
-    fn test_claim_rejects_address_not_on_recipient_list() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        let second = Address::generate(&env);
-
-        let id = client.open_stream(
-            &token_id,
-            &payer,
-            &soroban_sdk::vec![&env, recipient.clone(), second],
-            &soroban_sdk::vec![&env, 1u32, 1u32],
-            &RATE,
-            &DEPOSIT,
-        );
-        advance_by(&env, 10);
-
-        let stranger = Address::generate(&env);
-        client.claim_stream(&id, &stranger);
-    }
-
-    #[test]
-    #[should_panic(expected = "recipients and weights must have equal length")]
-    fn test_open_stream_rejects_mismatched_recipients_and_weights() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-
-        client.open_stream(
-            &token_id,
-            &payer,
-            &soroban_sdk::vec![&env, recipient],
-            &soroban_sdk::vec![&env, 1u32, 1u32],
-            &RATE,
-            &DEPOSIT,
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "at least one recipient is required")]
-    fn test_open_stream_rejects_empty_recipients() {
-        let env = Env::default();
-        let (_, client, token_id, payer, _recipient) = stream_fixture(&env, DEPOSIT);
-
-        client.open_stream(
-            &token_id,
-            &payer,
-            &soroban_sdk::Vec::new(&env),
-            &soroban_sdk::Vec::new(&env),
-            &RATE,
-            &DEPOSIT,
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "weight must be positive")]
-    fn test_open_stream_rejects_zero_weight() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        let second = Address::generate(&env);
-
-        client.open_stream(
-            &token_id,
-            &payer,
-            &soroban_sdk::vec![&env, recipient, second],
-            &soroban_sdk::vec![&env, 1u32, 0u32],
-            &RATE,
-            &DEPOSIT,
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "recipients must not contain duplicate addresses")]
-    fn test_open_stream_rejects_duplicate_recipient() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-
-        client.open_stream(
-            &token_id,
-            &payer,
-            &soroban_sdk::vec![&env, recipient.clone(), recipient],
-            &soroban_sdk::vec![&env, 1u32, 1u32],
-            &RATE,
-            &DEPOSIT,
-        );
-    }
-
-    // ── Pausable streams (#560) ─────────────────────────────────────────────
-
-    #[test]
-    fn test_pause_stream_halts_accrual() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-        advance_by(&env, 10);
-        client.pause_stream(&id, &payer);
-
-        let at_pause = client.get_claimable(&id, &recipient);
-        assert_eq!(at_pause, RATE * 10);
-
-        // 500 ledgers of paused time must not accrue anything.
-        advance_by(&env, 500);
-        assert_eq!(client.get_claimable(&id, &recipient), at_pause);
-
-        let stream = client.get_stream(&id);
-        assert!(stream.paused);
-        assert_eq!(stream.paused_at_ledger, stream.start_ledger + 10);
-    }
-
-    #[test]
-    fn test_resume_stream_continues_accrual() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-        advance_by(&env, 10);
-        client.pause_stream(&id, &payer);
-        advance_by(&env, 500);
-        client.resume_stream(&id, &payer);
-
-        // Resuming does not back-pay the pause…
-        assert_eq!(client.get_claimable(&id, &recipient), RATE * 10);
-        // …and accrual picks up from where it stopped.
-        advance_by(&env, 10);
-        assert_eq!(client.get_claimable(&id, &recipient), RATE * 20);
-
-        let stream = client.get_stream(&id);
-        assert!(!stream.paused);
-        assert_eq!(stream.paused_ledgers, 500);
-    }
-
-    #[test]
-    fn test_paused_time_excluded_from_claim() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        let token = token::Client::new(&env, &token_id);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-        advance_by(&env, 40);
-        client.pause_stream(&id, &payer);
-        advance_by(&env, 200);
-        client.resume_stream(&id, &payer);
-        advance_by(&env, 60);
-
-        // 300 ledgers of wall time, 100 of them running.
-        assert_eq!(client.claim_stream(&id, &recipient), RATE * 100);
-        assert_eq!(token.balance(&recipient), RATE * 100);
-    }
-
-    #[test]
-    fn test_claim_while_paused_pays_only_pre_pause_accrual() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-        advance_by(&env, 25);
-        client.pause_stream(&id, &payer);
-        advance_by(&env, 100);
-
-        assert_eq!(client.claim_stream(&id, &recipient), RATE * 25);
-        assert_eq!(client.claim_stream(&id, &recipient), 0);
-    }
-
-    #[test]
-    fn test_close_while_paused_refunds_unstreamed() {
-        let env = Env::default();
-        let (contract_id, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-        let token = token::Client::new(&env, &token_id);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-        advance_by(&env, 15);
-        client.pause_stream(&id, &payer);
-        advance_by(&env, 400);
-        client.close_stream(&id, &payer);
-
-        let streamed = RATE * 15;
-        assert_eq!(token.balance(&recipient), streamed);
-        assert_eq!(token.balance(&payer), DEPOSIT - streamed);
-        assert_eq!(token.balance(&contract_id), 0);
-    }
-
-    #[test]
-    #[should_panic(expected = "stream already paused")]
-    fn test_double_pause_rejected() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-        client.pause_stream(&id, &payer);
-        client.pause_stream(&id, &payer);
-    }
-
-    #[test]
-    #[should_panic(expected = "stream is not paused")]
-    fn test_resume_without_pause_rejected() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-        client.resume_stream(&id, &payer);
-    }
-
-    #[test]
-    #[should_panic(expected = "unauthorized")]
-    fn test_pause_requires_payer() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-        client.pause_stream(&id, &recipient);
-    }
-
-    #[test]
-    #[should_panic(expected = "stream is closed")]
-    fn test_pause_after_close_rejected() {
-        let env = Env::default();
-        let (_, client, token_id, payer, recipient) = stream_fixture(&env, DEPOSIT);
-
-        let id = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-        client.close_stream(&id, &payer);
-        client.pause_stream(&id, &payer);
-    }
-
-    // ── Schema versioning / migration (#562) ────────────────────────────────
-
-    #[test]
-    fn test_initialize_sets_schema_version() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, MicroPayContract);
-        let client = MicroPayContractClient::new(&env, &contract_id);
-        client.initialize(&Address::generate(&env));
-
-        assert_eq!(client.get_schema_version(), SCHEMA_VERSION);
-    }
-
-    #[test]
-    fn test_migrate_stamps_unversioned_instance() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, MicroPayContract);
-        let client = MicroPayContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-        env.mock_all_auths();
-
-        // Simulate an instance deployed before versioning existed.
-        env.as_contract(&contract_id, || {
-            env.storage().persistent().remove(&DataKey::SchemaVersion);
-        });
-        assert_eq!(client.get_schema_version(), 0);
-
-        assert_eq!(client.migrate(&admin), SCHEMA_VERSION);
-        assert_eq!(client.get_schema_version(), SCHEMA_VERSION);
-    }
-
-    #[test]
-    #[should_panic(expected = "schema already at current version")]
-    fn test_migrate_rejects_current_version() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, MicroPayContract);
-        let client = MicroPayContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-        env.mock_all_auths();
-
-        client.migrate(&admin);
-    }
-
-    #[test]
-    #[should_panic(expected = "Unauthorized")]
-    fn test_migrate_requires_admin() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, MicroPayContract);
-        let client = MicroPayContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-        env.mock_all_auths();
-
-        env.as_contract(&contract_id, || {
-            env.storage().persistent().remove(&DataKey::SchemaVersion);
-        });
-        client.migrate(&Address::generate(&env));
-    }
-
-    // ── Invariant: claimed never exceeds deposited (#557) ───────────────────
-
-    /// Deterministic linear congruential generator.
-    ///
-    /// Seeded per run so a failing sequence is reproducible from the seed in
-    /// the assertion message — no external RNG crate, and no flaky CI.
-    struct Lcg(u64);
-
-    impl Lcg {
-        fn new(seed: u64) -> Self {
-            Lcg(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15))
-        }
-
-        fn next_u64(&mut self) -> u64 {
-            self.0 = self
-                .0
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            self.0 >> 33
-        }
-
-        fn below(&mut self, bound: u64) -> u64 {
-            self.next_u64() % bound
-        }
-    }
-
-    /// Property test: across randomized sequences of open/claim/top_up/
-    /// pause/resume/close, `claimed <= deposited` must hold after *every*
-    /// call, and the contract must stay solvent for what it still owes.
-    #[test]
-    fn test_invariant_claimed_never_exceeds_deposited() {
-        const STREAMS: usize = 3;
-        const OPS_PER_RUN: usize = 80;
-        const FUNDING: i128 = 100_000_000;
-
-        for seed in 1..=8u64 {
-            let env = Env::default();
-            let (contract_id, client, token_id, payer, recipient) =
-                stream_fixture(&env, FUNDING);
-            let token = token::Client::new(&env, &token_id);
-
-            let mut ids = [0u32; STREAMS];
-            for id_slot in ids.iter_mut() {
-                *id_slot = open_single_stream(&env, &client, &token_id, &payer, &recipient, RATE, DEPOSIT);
-            }
-            let mut closed = [false; STREAMS];
-            let mut paused = [false; STREAMS];
-
-            let mut rng = Lcg::new(seed);
-            for step in 0..OPS_PER_RUN {
-                let idx = rng.below(STREAMS as u64) as usize;
-                let id = ids[idx];
-
-                match rng.below(7) {
-                    // Let time pass, sometimes far past the funded window.
-                    0 | 1 => advance_by(&env, 1 + rng.below(400) as u32),
-                    2 => {
-                        if !closed[idx] {
-                            client.claim_stream(&id, &recipient);
-                        }
-                    }
-                    3 => {
-                        if !closed[idx] {
-                            let amount = MIN_STREAM_DEPOSIT * (1 + rng.below(5) as i128);
-                            client.top_up_stream(&id, &payer, &amount);
-                        }
-                    }
-                    4 => {
-                        if !closed[idx] && !paused[idx] {
-                            client.pause_stream(&id, &payer);
-                            paused[idx] = true;
-                        }
-                    }
-                    5 => {
-                        if !closed[idx] && paused[idx] {
-                            client.resume_stream(&id, &payer);
-                            paused[idx] = false;
-                        }
-                    }
-                    _ => {
-                        if !closed[idx] {
-                            client.close_stream(&id, &payer);
-                            closed[idx] = true;
-                            paused[idx] = false;
-                        }
-                    }
-                }
-
-                // Invariant check after every single call.
-                let mut outstanding: i128 = 0;
-                for (slot, stream_id) in ids.iter().enumerate() {
-                    let stream = client.get_stream(stream_id);
-                    let claimed = claimed_of(&stream);
-                    assert!(
-                        claimed <= stream.deposited,
-                        "invariant violated (seed {}, step {}, stream {}): claimed {} > deposited {}",
-                        seed,
-                        step,
-                        slot,
-                        claimed,
-                        stream.deposited
-                    );
-                    assert!(
-                        claimed >= 0,
-                        "negative claimed (seed {}, step {}, stream {}): {}",
-                        seed,
-                        step,
-                        slot,
-                        claimed
-                    );
-
-                    let claimable = client.get_claimable(stream_id, &recipient);
-                    assert!(
-                        claimable <= stream.deposited - claimed,
-                        "claimable {} exceeds remaining deposit (seed {}, step {}, stream {})",
-                        claimable,
-                        seed,
-                        step,
-                        slot
-                    );
-
-                    if !closed[slot] {
-                        outstanding += stream.deposited - claimed;
-                    }
-                }
-
-                // Solvency: the contract still holds exactly what it owes.
-                assert_eq!(
-                    token.balance(&contract_id),
-                    outstanding,
-                    "contract balance does not cover outstanding streams (seed {}, step {})",
-                    seed,
-                    step
-                );
-            }
-        }
     }
 }

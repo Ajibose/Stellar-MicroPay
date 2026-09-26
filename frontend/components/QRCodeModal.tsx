@@ -3,7 +3,7 @@
  * Modal component for displaying QR code with Stellar payment URI (SEP-0007).
  */
 
-import { useEffect, useRef } from "react";
+import { useState, useRef } from "react";
 import { QRCodeSVG, QRCodeCanvas } from "qrcode.react";
 
 interface QRCodeModalProps {
@@ -15,9 +15,6 @@ interface QRCodeModalProps {
 
 export default function QRCodeModal({ isOpen, onClose, publicKey, amount }: QRCodeModalProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const returnFocusRef = useRef<HTMLElement | null>(null);
 
   // Generate SEP-0007 URI format: web+stellar:pay?destination=G...[&amount=X]
   const generateStellarURI = () => {
@@ -30,74 +27,10 @@ export default function QRCodeModal({ isOpen, onClose, publicKey, amount }: QRCo
 
   const stellarURI = generateStellarURI();
 
-  useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-
-    const activeElement = document.activeElement;
-    returnFocusRef.current = activeElement instanceof HTMLElement ? activeElement : null;
-
-    const focusFirstElement = () => {
-      const focusable = getFocusableElements(dialogRef.current);
-      const target = focusable[0] ?? closeButtonRef.current ?? dialogRef.current;
-      target?.focus();
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-
-      if (event.key !== "Tab") {
-        return;
-      }
-
-      const focusable = getFocusableElements(dialogRef.current);
-      if (focusable.length === 0) {
-        event.preventDefault();
-        dialogRef.current?.focus();
-        return;
-      }
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const current = document.activeElement;
-
-      if (event.shiftKey) {
-        if (!current || !dialogRef.current?.contains(current) || current === first) {
-          event.preventDefault();
-          last.focus();
-        }
-        return;
-      }
-
-      if (!current || !dialogRef.current?.contains(current) || current === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    const frame = window.requestAnimationFrame(focusFirstElement);
-    document.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      window.cancelAnimationFrame(frame);
-      document.removeEventListener("keydown", handleKeyDown);
-
-      const target = returnFocusRef.current;
-      if (target) {
-        window.setTimeout(() => target.focus(), 0);
-      }
-    };
-  }, [isOpen, onClose]);
-
   // Download QR code as PNG
   const downloadQRCode = () => {
     if (!canvasRef.current) return;
-    
+
     const canvas = canvasRef.current;
     const url = canvas.toDataURL("image/png");
     const link = document.createElement("a");
@@ -111,32 +44,15 @@ export default function QRCodeModal({ isOpen, onClose, publicKey, amount }: QRCo
   if (!isOpen) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) {
-          onClose();
-        }
-      }}
-    >
-      <div
-        ref={dialogRef}
-        className="card max-w-md w-full animate-slide-up outline-none"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="qr-code-modal-title"
-        aria-describedby="qr-code-modal-description"
-        tabIndex={-1}
-      >
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="card max-w-md w-full animate-slide-up">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
-          <h3 id="qr-code-modal-title" className="font-display text-xl font-semibold text-white">
+          <h3 className="font-display text-xl font-semibold text-white">
             Receive Payment QR Code
           </h3>
           <button
-            ref={closeButtonRef}
             onClick={onClose}
-            aria-label="Close QR code modal"
             className="text-slate-400 hover:text-white transition-colors p-1 rounded-lg hover:bg-white/5"
           >
             <CloseIcon className="w-5 h-5" />
@@ -154,7 +70,7 @@ export default function QRCodeModal({ isOpen, onClose, publicKey, amount }: QRCo
               ref={canvasRef}
             />
           </div>
-          
+
           {/* Address Display */}
           <div className="text-center mb-4">
             <p className="text-xs text-slate-400 mb-1">Your Stellar Address</p>
@@ -191,33 +107,13 @@ export default function QRCodeModal({ isOpen, onClose, publicKey, amount }: QRCo
 
         {/* Instructions */}
         <div className="mt-4 pt-4 border-t border-white/5">
-          <p id="qr-code-modal-description" className="text-xs text-slate-400 text-center">
+          <p className="text-xs text-slate-400 text-center">
             Scan this QR code with Freighter mobile or any Stellar wallet to receive payments.
           </p>
         </div>
       </div>
     </div>
   );
-}
-
-function getFocusableElements(root: HTMLElement | null) {
-  if (!root) {
-    return [];
-  }
-
-  const selector = [
-    'button:not([disabled])',
-    '[href]',
-    'input:not([disabled])',
-    'select:not([disabled])',
-    'textarea:not([disabled])',
-    '[tabindex]:not([tabindex="-1"])',
-  ].join(",");
-
-  return Array.from(root.querySelectorAll<HTMLElement>(selector)).filter((element) => {
-    const style = window.getComputedStyle(element);
-    return style.visibility !== "hidden" && style.display !== "none";
-  });
 }
 
 // ─── Icons ─────────────────────────────────────────────────────────────────────

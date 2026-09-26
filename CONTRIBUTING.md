@@ -20,7 +20,7 @@ Stellar MicroPay is an open-source project and every contribution matters, wheth
 
 ## 🧭 Code of Conduct
 
-Be kind, inclusive, and constructive. We follow the [Contributor Covenant](CODE_OF_CONDUCT.md). Harassment of any kind will not be tolerated.
+Be kind, inclusive, and constructive. We follow the [Contributor Covenant](https://www.contributor-covenant.org/). Harassment of any kind will not be tolerated.
 
 ---
 
@@ -109,38 +109,13 @@ git checkout -b feature/qr-code-payments
 
 ### Commit message style
 
-We use [Conventional Commits](https://www.conventionalcommits.org/) with automated enforcement via commitlint and Husky:
+We use [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
 feat: add QR code payment generation
 fix: correct balance display on dashboard
 docs: update API endpoint documentation
 chore: upgrade stellar-sdk to latest
-```
-
-**Commit types:**
-- `feat` — A new feature
-- `fix` — A bug fix
-- `docs` — Documentation changes
-- `style` — Code style changes (formatting, linting)
-- `refactor` — Code refactoring without feature changes
-- `perf` — Performance improvements
-- `test` — Test additions or changes
-- `chore` — Build, dependency, or tooling changes
-- `ci` — CI/CD configuration changes
-- `revert` — Revert a previous commit
-
-**Commit message validation:**
-
-Husky automatically runs commitlint on every commit to validate the message format. If your commit message doesn't follow the Conventional Commits format, the commit will be rejected with a helpful error message. Simply fix the message and try again.
-
-Example:
-```bash
-# ✅ Valid
-git commit -m "feat: add payment history export"
-
-# ❌ Invalid (will be rejected)
-git commit -m "Added new stuff"
 ```
 
 ---

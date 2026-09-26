@@ -1,17 +1,24 @@
 /**
  * lib/useToast.ts
- * Backward-compatible wrapper around the global ToastContext.
- * Existing callers of useToast() continue to work with showToast(msg).
+ * Hook for managing toast visibility with auto-dismiss.
  */
 
-import { useToastContext } from "@/lib/ToastContext";
+import { useState, useCallback, useRef } from "react";
 
-export function useToast() {
-  const { addToast } = useToastContext();
+export function useToast(duration = 2000) {
+  const [visible, setVisible] = useState(false);
+  const [message, setMessage] = useState("");
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const showToast = (msg: string, type: "success" | "error" | "info" = "info") => {
-    addToast(msg, type);
-  };
+  const showToast = useCallback(
+    (msg: string) => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      setMessage(msg);
+      setVisible(true);
+      timerRef.current = setTimeout(() => setVisible(false), duration);
+    },
+    [duration]
+  );
 
-  return { showToast };
+  return { visible, message, showToast };
 }

@@ -211,7 +211,7 @@ export default function TipWidget({
             <div className="mt-6 rounded-2xl border border-white/10 bg-cosmos-950/50 px-4 py-4">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Selected tip</p>
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Selected tip</p>
                   <p className="mt-2 font-display text-3xl font-semibold text-white">
                     {hasValidAmount ? formatXLM(parsedAmount) : "0 XLM"}
                   </p>
@@ -222,9 +222,9 @@ export default function TipWidget({
 
                 {publicKey ? (
                   <div className="text-right">
-                    <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Connected wallet</p>
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Connected wallet</p>
                     <p className="mt-2 font-mono text-sm text-slate-200">{shortenAddress(publicKey)}</p>
-                    <p className="mt-2 text-xs text-slate-400">
+                    <p className="mt-2 text-xs text-slate-500">
                       {isBalanceLoading ? "Checking balance..." : `Balance: ${formatXLM(xlmBalance)}`}
                     </p>
                   </div>
@@ -294,6 +294,7 @@ export default function TipWidget({
                   hideAssetSelector
                   hideDestinationField
                   hideAmountField
+                  hideMemoField
                 />
               </div>
             )}

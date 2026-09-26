@@ -42,23 +42,17 @@ export function shortenAddress(address: string, chars = 4): string {
 
 /**
  * Format XLM amount with up to 7 decimal places, trimming trailing zeros.
- * @param amount - The amount to format
- * @param locale - The locale for formatting (defaults to 'en-US')
  */
-export function formatXLM(amount: string | number, locale = 'en-US'): string {
-  return formatAsset(amount, "XLM", locale);
+export function formatXLM(amount: string | number): string {
+  return formatAsset(amount, "XLM");
 }
 
 /**
  * Format a Stellar asset amount with asset-specific precision rules.
- * @param amount - The amount to format
- * @param assetCode - The asset code (e.g., 'XLM', 'USDC')
- * @param locale - The locale for formatting (defaults to 'en-US')
  */
 export function formatAsset(
   amount: string | number,
-  assetCode = DEFAULT_ASSET_CODE,
-  locale = 'en-US'
+  assetCode = DEFAULT_ASSET_CODE
 ): string {
   const normalizedAssetCode = normalizeAssetCode(assetCode);
   const rule = getAssetFormatRule(normalizedAssetCode);
@@ -72,7 +66,7 @@ export function formatAsset(
     return `${zeroValue} ${normalizedAssetCode}`;
   }
 
-  return `${num.toLocaleString(locale, rule)} ${normalizedAssetCode}`;
+  return `${num.toLocaleString("en-US", rule)} ${normalizedAssetCode}`;
 }
 
 /**
@@ -116,39 +110,12 @@ export function formatDate(dateString: string): string {
  * Copy text to clipboard and return success boolean.
  */
 export async function copyToClipboard(text: string): Promise<boolean> {
-  // Preferred path: the async Clipboard API, only available in secure contexts
-  // (HTTPS or localhost).
-  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch {
-      // Permission denied or transient failure — fall back to execCommand below.
-    }
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
   }
-
-  // Fallback for non-secure (HTTP) contexts where navigator.clipboard is
-  // undefined. Returns the real success state so callers don't show a false
-  // "Copied!" confirmation.
-  if (typeof document !== "undefined" && typeof document.execCommand === "function") {
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.setAttribute("readonly", "");
-    textarea.style.position = "fixed";
-    textarea.style.opacity = "0";
-    document.body.appendChild(textarea);
-    textarea.focus();
-    textarea.select();
-    try {
-      return document.execCommand("copy");
-    } catch {
-      return false;
-    } finally {
-      document.body.removeChild(textarea);
-    }
-  }
-
-  return false;
 }
 
 /**
@@ -232,11 +199,9 @@ export function parseAddressBookCSV(csv: string) {
 
 /**
  * Format a USD value with 2 decimal places (e.g. "≈ $142.50 USD").
- * @param usdValue - The USD value to format
- * @param locale - The locale for formatting (defaults to 'en-US')
  */
-export function formatUSD(usdValue: number, locale = 'en-US'): string {
-  return `≈ $${usdValue.toLocaleString(locale, {
+export function formatUSD(usdValue: number): string {
+  return `≈ $${usdValue.toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })} USD`;
@@ -273,7 +238,7 @@ function triggerDownload(contents: string, filename: string, type: string): void
   document.body.removeChild(link);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
- 
+
 /**
  * Convert an array of PaymentRecords to a CSV string and trigger a browser
  * file download. No server required — uses a Blob URL.
@@ -291,7 +256,7 @@ export function exportToCSV(payments: PaymentRecord[]): void {
     "Memo",
     "Transaction Hash",
   ];
- 
+
   const rows = payments.map((tx) => [
     csvCell(format(new Date(tx.createdAt), "yyyy-MM-dd HH:mm:ss")),
     csvCell(tx.type === "sent" ? "Sent" : "Received"),
@@ -302,48 +267,14 @@ export function exportToCSV(payments: PaymentRecord[]): void {
     csvCell(tx.memo ?? ""),
     csvCell(tx.transactionHash),
   ]);
- 
+
   const csv = [
     HEADERS.map(csvCell).join(","),
     ...rows.map((r) => r.join(",")),
   ].join("\r\n");
- 
+
   const dateStamp = format(new Date(), "yyyy-MM-dd");
   const filename = `stellar-micropay-transactions-${dateStamp}.csv`;
-  triggerDownload(csv, filename, "text/csv;charset=utf-8;");
-}
-
-interface TipCSVRecord {
-  timestamp: string;
-  senderPublicKey: string;
-  amount: string;
-  asset: string;
-  memo?: string;
-}
-
-/**
- * Convert an array of received tips to a CSV string and trigger a browser
- * file download, for creator bookkeeping (#612).
- *
- * Columns: Date, Sender, Amount, Memo
- */
-export function exportTipsToCSV(tips: TipCSVRecord[]): void {
-  const HEADERS = ["Date", "Sender", "Amount", "Memo"];
-
-  const rows = tips.map((tip) => [
-    csvCell(format(new Date(tip.timestamp), "yyyy-MM-dd HH:mm:ss")),
-    csvCell(tip.senderPublicKey),
-    csvCell(`${tip.amount} ${tip.asset}`),
-    csvCell(tip.memo ?? ""),
-  ]);
-
-  const csv = [
-    HEADERS.map(csvCell).join(","),
-    ...rows.map((r) => r.join(",")),
-  ].join("\r\n");
-
-  const dateStamp = format(new Date(), "yyyy-MM-dd");
-  const filename = `stellar-micropay-tips-${dateStamp}.csv`;
   triggerDownload(csv, filename, "text/csv;charset=utf-8;");
 }
 

@@ -35,10 +35,4 @@ router.get("/stats/:creatorPublicKey", strictLimiter, sanitizePublicKey, tipsCon
  */
 router.get("/sent/:senderPublicKey", strictLimiter, sanitizePublicKey, tipsController.getTipsSent);
 
-/**
- * GET /api/tips/leaderboard/:creatorPublicKey
- * Get top tippers for a creator.
- */
-router.get("/leaderboard/:creatorPublicKey", strictLimiter, sanitizePublicKey, tipsController.getTopTippers);
-
 module.exports = router;

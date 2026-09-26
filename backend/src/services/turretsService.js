@@ -9,59 +9,25 @@ const crypto = require("crypto");
 const {
   Account,
   Asset,
+  Horizon,
   Keypair,
   Networks,
   Operation,
   Transaction,
   TransactionBuilder,
 } = require("@stellar/stellar-sdk");
-const { server } = require("../config/stellar");
-const logger = require("../utils/logger");
 
+const HORIZON_URL = process.env.HORIZON_URL || "https://horizon-testnet.stellar.org";
 const NETWORK_PASSPHRASE =
   process.env.STELLAR_NETWORK === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
 
+const server = new Horizon.Server(HORIZON_URL);
+
 const deployments = new Map();
 const executionHistory = [];
-const auditLog = [];
 
 let runnerStarted = false;
 let runnerTimer = null;
-
-/**
- * Add an audit log entry for Turrets actions.
- * Tracks who performed what action and when for security auditing.
- *
- * @param {string} action - The action performed (e.g., "deploy", "pause", "resume")
- * @param {string} actor - The Stellar public key of the actor
- * @param {string} deploymentId - The deployment ID affected
- * @param {object} details - Additional details about the action
- */
-function addAuditLog(action, actor, deploymentId, details = {}) {
-  const entry = {
-    id: crypto.randomUUID(),
-    action,
-    actor,
-    deploymentId,
-    details,
-    timestamp: new Date().toISOString(),
-  };
-  auditLog.push(entry);
-
-  // Keep audit log size bounded (max 5000 entries)
-  if (auditLog.length > 5000) {
-    auditLog.splice(0, auditLog.length - 5000);
-  }
-
-  // Also log to structured logger for persistence
-  logger.info({
-    audit: true,
-    action,
-    actor,
-    deploymentId,
-    details,
-  }, `Turrets audit: ${action} by ${actor}`);
-}
 
 function validatePublicKey(publicKey) {
   if (!publicKey || !/^G[A-Z0-9]{55}$/.test(publicKey)) {
@@ -138,61 +104,10 @@ function normalizeStopLossConfig(config = {}) {
   };
 }
 
-function normalizeEscrowReleaseConfig(config = {}) {
-  const escrowPublicKey = config.escrowPublicKey || null;
-  const beneficiaryPublicKey = config.beneficiaryPublicKey || null;
-  const releaseAmount = Number(config.releaseAmount || 0);
-  const assetCode = (config.assetCode || "XLM").toUpperCase();
-  const assetIssuer = config.assetIssuer || null;
-  const releaseCondition = config.releaseCondition || "time";
-  const releaseAfterMs = Number(config.releaseAfterMs || 0);
-
-  if (!escrowPublicKey || !/^G[A-Z0-9]{55}$/.test(escrowPublicKey)) {
-    const err = new Error("escrow_release: valid escrowPublicKey is required");
-    err.status = 400;
-    throw err;
-  }
-
-  if (!beneficiaryPublicKey || !/^G[A-Z0-9]{55}$/.test(beneficiaryPublicKey)) {
-    const err = new Error("escrow_release: valid beneficiaryPublicKey is required");
-    err.status = 400;
-    throw err;
-  }
-
-  if (!Number.isFinite(releaseAmount) || releaseAmount <= 0) {
-    const err = new Error("escrow_release: releaseAmount must be greater than 0");
-    err.status = 400;
-    throw err;
-  }
-
-  if (!["time", "manual"].includes(releaseCondition)) {
-    const err = new Error("escrow_release: releaseCondition must be 'time' or 'manual'");
-    err.status = 400;
-    throw err;
-  }
-
-  if (releaseCondition === "time" && (!Number.isFinite(releaseAfterMs) || releaseAfterMs <= 0)) {
-    const err = new Error("escrow_release: releaseAfterMs must be greater than 0 for time-based release");
-    err.status = 400;
-    throw err;
-  }
-
-  return {
-    escrowPublicKey,
-    beneficiaryPublicKey,
-    releaseAmount,
-    assetCode,
-    assetIssuer,
-    releaseCondition,
-    releaseAfterMs,
-  };
-}
-
 function normalizeConfig(type, config) {
   if (type === "dca") return normalizeDcaConfig(config);
   if (type === "stop_loss") return normalizeStopLossConfig(config);
-  if (type === "escrow_release") return normalizeEscrowReleaseConfig(config);
-  const err = new Error("Unsupported txFunction type. Use 'dca', 'stop_loss', or 'escrow_release'.");
+  const err = new Error("Unsupported txFunction type. Use 'dca' or 'stop_loss'.");
   err.status = 400;
   throw err;
 }
@@ -308,24 +223,6 @@ function stopLossTxFunction(config, xlmUsdPrice) {
   };
 }
 
-function escrowReleaseTxFunction(config) {
-  const asset =
-    config.assetCode === "XLM"
-      ? { code: "XLM", issuer: null }
-      : { code: config.assetCode, issuer: config.assetIssuer };
-
-  return {
-    action: "escrow_release",
-    stellarOperation: "payment",
-    from: config.escrowPublicKey,
-    to: config.beneficiaryPublicKey,
-    asset,
-    amount: config.releaseAmount.toFixed(7),
-    releaseCondition: config.releaseCondition,
-    note: "Release escrowed funds to beneficiary without the backend holding private keys.",
-  };
-}
-
 function addExecutionLog(deploymentId, status, message, result = null) {
   executionHistory.push({
     id: crypto.randomUUID(),
@@ -401,16 +298,6 @@ async function evaluateDeployment(deployment) {
         deployment.nextRunAt = new Date(Date.now() + 60 * 1000).toISOString();
       }
     }
-
-    if (deployment.type === "escrow_release") {
-      const releaseAt = deployment.createdAtMs + deployment.config.releaseAfterMs;
-      if (deployment.config.releaseCondition === "time" && now >= releaseAt) {
-        const result = escrowReleaseTxFunction(deployment.config);
-        deployment.lastExecutedAt = new Date().toISOString();
-        deployment.status = "completed";
-        addExecutionLog(deployment.id, "executed", "Escrow time-lock expired, release triggered", result);
-      }
-    }
   } catch (err) {
     deployment.lastError = err.message;
     deployment.lastCheckedAt = new Date().toISOString();
@@ -459,21 +346,7 @@ function deployTxFunction({ ownerPublicKey, type, config, deploymentHash, signed
     toDexAsset(normalizedConfig.sellAssetCode, normalizedConfig.sellAssetIssuer);
   }
 
-  if (type === "escrow_release" && normalizedConfig.assetCode !== "XLM") {
-    toDexAsset(normalizedConfig.assetCode, normalizedConfig.assetIssuer);
-  }
-
   const id = crypto.randomUUID();
-  const now = Date.now();
-
-  let nextRunAt;
-  if (type === "dca") {
-    nextRunAt = nextRunIso(normalizedConfig.intervalMinutes);
-  } else if (type === "escrow_release") {
-    nextRunAt = new Date(now + normalizedConfig.releaseAfterMs).toISOString();
-  } else {
-    nextRunAt = new Date(now + 60 * 1000).toISOString();
-  }
 
   const deployment = {
     id,
@@ -483,9 +356,11 @@ function deployTxFunction({ ownerPublicKey, type, config, deploymentHash, signed
     config: normalizedConfig,
     deploymentHash,
     signedChallengeXDR,
-    createdAt: new Date(now).toISOString(),
-    createdAtMs: now,
-    nextRunAt,
+    createdAt: new Date().toISOString(),
+    nextRunAt:
+      type === "dca"
+        ? nextRunIso(normalizedConfig.intervalMinutes)
+        : new Date(Date.now() + 60 * 1000).toISOString(),
     lastExecutedAt: null,
     lastCheckedAt: null,
     lastObservedPriceUsd: null,
@@ -494,13 +369,6 @@ function deployTxFunction({ ownerPublicKey, type, config, deploymentHash, signed
 
   deployments.set(id, deployment);
   addExecutionLog(id, "created", "txFunction deployed");
-
-  // Audit log for deployment action
-  addAuditLog("deploy", ownerPublicKey, id, {
-    type,
-    config: normalizedConfig,
-    deploymentHash,
-  });
 
   startRunner();
 
@@ -531,53 +399,11 @@ function getExecutionHistory(deploymentId) {
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 }
 
-function setDeploymentStatus(id, status, actor = null) {
+function setDeploymentStatus(id, status) {
   const deployment = getDeployment(id);
-  const previousStatus = deployment.status;
   deployment.status = status;
   addExecutionLog(id, "status", `txFunction ${status}`);
-
-  // Audit log for status change actions (pause/resume)
-  if (actor && (status === "paused" || status === "active")) {
-    addAuditLog(status, actor, id, {
-      previousStatus,
-      newStatus: status,
-    });
-  }
-
   return deployment;
-}
-
-/**
- * Get audit log entries, optionally filtered by actor or deployment ID.
- *
- * @param {object} filters - Optional filters { actor, deploymentId, limit }
- * @returns {Array} Filtered audit log entries
- */
-function getAuditLog(filters = {}) {
-  let entries = [...auditLog];
-
-  if (filters.actor) {
-    entries = entries.filter((entry) => entry.actor === filters.actor);
-  }
-
-  if (filters.deploymentId) {
-    entries = entries.filter((entry) => entry.deploymentId === filters.deploymentId);
-  }
-
-  if (filters.action) {
-    entries = entries.filter((entry) => entry.action === filters.action);
-  }
-
-  // Sort by timestamp descending (newest first)
-  entries.sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
-
-  // Apply limit if specified
-  if (filters.limit && filters.limit > 0) {
-    entries = entries.slice(0, filters.limit);
-  }
-
-  return entries;
 }
 
 module.exports = {
@@ -587,7 +413,6 @@ module.exports = {
   getDeployment,
   getExecutionHistory,
   setDeploymentStatus,
-  getAuditLog,
   startRunner,
   stopRunner,
 };

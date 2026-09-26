@@ -133,7 +133,7 @@ export default function Home() {
                 <div className="font-display text-3xl font-bold text-gradient mb-1">
                   {stat.prefix || ""}{formatValue()}{stat.suffix || ""}
                 </div>
-                <div className="text-slate-400 text-sm">{stat.label}</div>
+                <div className="text-slate-500 text-sm">{stat.label}</div>
               </div>
             );
           })}
@@ -267,7 +267,7 @@ export default function Home() {
           <div className="fixed inset-0 z-50 bg-cosmos-900/90 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="w-full max-w-md">
               <WalletConnect onConnectSuccess={handleWalletConnect} />
-              <button onClick={() => setShowConnect(false)} className="mt-4 w-full text-center text-sm text-slate-400 hover:text-slate-300 transition-colors cursor-pointer">
+              <button onClick={() => setShowConnect(false)} className="mt-4 w-full text-center text-sm text-slate-500 hover:text-slate-300 transition-colors cursor-pointer">
                 Cancel
               </button>
             </div>

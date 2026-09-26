@@ -16,7 +16,7 @@ export default function RequestPage() {
   const { publicKey } = useWallet();
   const router = useRouter();
   const { r } = router.query;
-  
+
   const [prefill, setPrefill] = useState<PrefillData | null>(null);
   const [xlmBalance, setXlmBalance] = useState<string>("0");
   const [error, setError] = useState<string | null>(null);
@@ -24,7 +24,7 @@ export default function RequestPage() {
   useEffect(() => {
     if (r && typeof r === "string") {
       try {
-        const decodedString = atob(r); 
+        const decodedString = atob(r);
         const parsedData = JSON.parse(decodedString);
 
         if (parsedData.validUntil && Date.now() > parsedData.validUntil) {
@@ -62,8 +62,8 @@ export default function RequestPage() {
         </div>
         <h2 className="text-xl font-bold text-white mb-2">Request Unavailable</h2>
         <p className="text-slate-400 mb-6">{error}</p>
-        <button 
-          onClick={() => router.push('/dashboard')} 
+        <button
+          onClick={() => router.push('/dashboard')}
           className="btn-secondary w-full py-2"
         >
           Return to Dashboard

@@ -122,7 +122,7 @@ function getTipsStats(creatorPublicKey) {
   if (tips.length > 0) {
     const totalAmount = tips.reduce((sum, tip) => sum + parseFloat(tip.amount), 0);
     stats.averageTip = String(totalAmount / tips.length);
-    
+
     const amounts = tips.map(t => parseFloat(t.amount));
     stats.largestTip = String(Math.max(...amounts));
     stats.smallestTip = String(Math.min(...amounts));

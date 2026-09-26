@@ -1,17 +1,9 @@
-import { formatAsset, formatUSD, formatXLM, timeAgo, clampAmount } from "@/utils/format";
+import { formatAsset, formatUSD, formatXLM } from "@/utils/format";
 
 describe("formatAsset", () => {
   it("preserves XLM formatting with up to 7 decimal places", () => {
     expect(formatXLM(1.2345678)).toBe("1.2345678 XLM");
     expect(formatAsset("12.5", "XLM")).toBe("12.5 XLM");
-  });
-
-  it("formats formatXLM(0) as 0 XLM", () => {
-    expect(formatXLM(0)).toBe("0 XLM");
-  });
-
-  it("formats formatXLM('1.2345678') as 1.2345678 XLM", () => {
-    expect(formatXLM('1.2345678')).toBe("1.2345678 XLM");
   });
 
   it("formats USDC with 2 fixed decimal places", () => {
@@ -44,24 +36,5 @@ describe("formatUSD", () => {
 
   it("formats large values with comma separators", () => {
     expect(formatUSD(1234567.89)).toBe("\u2248 $1,234,567.89 USD");
-  });
-});
-
-describe("timeAgo", () => {
-  it("returns relative time string for a known past date", () => {
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-    expect(timeAgo(fiveMinutesAgo)).toBe("5 minutes ago");
-  });
-});
-
-describe("clampAmount", () => {
-  it("returns min when value is 'abc'", () => {
-    expect(clampAmount("abc")).toBe(0.0000001);
-  });
-
-  it("clamps amount correctly within min and max boundaries", () => {
-    expect(clampAmount("0.00000001")).toBe(0.0000001);
-    expect(clampAmount("1000000")).toBe(999999);
-    expect(clampAmount("5.5")).toBe(5.5);
   });
 });

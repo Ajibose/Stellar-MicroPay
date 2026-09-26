@@ -9,15 +9,11 @@ export default function Document() {
   return (
     <Html lang="en">
       <Head>
-        {/* Prevent theme flash on page load (#217) without requiring inline script CSP allowances. */}
-        <script src="/theme-init.js" />
-
         {/* PWA Manifest */}
         <link rel="manifest" href="/manifest.json" />
 
-        {/* Theme color for browser UI - defaults to light theme color */}
-        <meta name="theme-color" content="#f0f6ff" media="(prefers-color-scheme: light)" />
-        <meta name="theme-color" content="#050a1a" media="(prefers-color-scheme: dark)" />
+        {/* Theme color for browser UI */}
+        <meta name="theme-color" content="#7B3FE4" />
 
         {/* Apple Touch Icon */}
         <link rel="apple-touch-icon" href="/icon-192.png" />
