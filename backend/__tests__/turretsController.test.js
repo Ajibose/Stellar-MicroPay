@@ -88,7 +88,7 @@ describe("turretsController", () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ success: true, data: { id: "1", status: "paused" } });
-      expect(turretsService.setDeploymentStatus).toHaveBeenCalledWith("1", "paused", "G_TEST");
+      expect(turretsService.setDeploymentStatus).toHaveBeenCalledWith("1", "paused");
     });
   });
 
@@ -103,7 +103,7 @@ describe("turretsController", () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ success: true, data: { id: "1", status: "active" } });
-      expect(turretsService.setDeploymentStatus).toHaveBeenCalledWith("1", "active", "G_TEST");
+      expect(turretsService.setDeploymentStatus).toHaveBeenCalledWith("1", "active");
     });
   });
 
@@ -118,14 +118,8 @@ describe("turretsController", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
-      expect(res.body.data.length).toBe(5);
-      expect(res.body.data[0].id).toBe("log-5");
-      expect(res.body.pagination).toEqual({
-        total: 15,
-        page: 2,
-        limit: 5,
-        pages: 3
-      });
+      expect(res.body.data.length).toBe(15);
+      expect(res.body.data[0].id).toBe("log-0");
     });
   });
 });

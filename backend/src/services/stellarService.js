@@ -12,7 +12,6 @@ require("dotenv").config();
 const HORIZON_URL =
   process.env.HORIZON_URL || "https://horizon-testnet.stellar.org";
 
-<<<<<<< HEAD
 // ─── In-memory LRU cache for getAccountStreaks (1 hour TTL) ─────────────────
 const STREAKS_CACHE_TTL_MS = 60 * 60 * 1000;
 const STREAKS_CACHE_MAX = 1000;
@@ -101,9 +100,7 @@ function cacheSet(key, value) {
 function clearAccountCache() {
   accountCache.clear();
 }
-=======
 const server = new Horizon.Server(HORIZON_URL);
->>>>>>> origin/main
 
 /** @type {Map<string, { value: object, expiresAt: number }>} */
 const streaksCache = new Map();
@@ -333,17 +330,12 @@ function validatePublicKey(publicKey) {
   }
 }
 
-<<<<<<< HEAD
 module.exports = {
   getAccount,
   getXLMBalance,
   getPayments,
-  streamPaymentEvents,
   validatePublicKey,
   clearAccountCache,
   clearStreaksCache,
   getAccountStreaks,
 };
-=======
-module.exports = { getAccount, getXLMBalance, getPayments, validatePublicKey };
->>>>>>> origin/main

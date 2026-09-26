@@ -34,7 +34,7 @@ router.get("/:publicKey/balance", strictLimiter, sanitizePublicKey, accountContr
  * GET /api/accounts/:publicKey/streaks
  * Fetch user's transaction streak.
  */
-router.get("/:publicKey/streaks", sensitiveLimiter, verifyJWT, sanitizePublicKey, requireOwnAccount, accountController.getStreaks);
+router.get("/:publicKey/streaks", strictLimiter, sanitizePublicKey, accountController.getStreaks);
 
 /**
  * POST /api/accounts/register

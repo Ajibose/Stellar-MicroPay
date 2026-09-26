@@ -103,23 +103,7 @@ const helmetOptions = {
 };
 
 app.use(helmet(helmetOptions));
-// gzip/brotli-negotiated response compression (#611) — shrinks JSON payloads
-// before they hit the wire. Must run before routes register their handlers so
-// res.write/res.end get wrapped for every response. SSE streams are excluded so
-// EventSource can receive incremental chunks without buffering delays.
-app.use(
-  compression({
-    filter: (req, res) => {
-      if (req.path?.endsWith("/stream")) {
-        return false;
-      }
-      return compression.filter(req, res);
-    },
-  })
-);
-// Structured JSON request logging (#269) — replaces morgan('dev'); reuses the
-// shared pino logger so HTTP logs are machine-parseable (Datadog/CloudWatch).
-app.use(pinoHttp({ logger }));
+app.use(morgan("dev"));
 app.use(express.json({ limit: "10kb" }));
 
 // JSON parsing error handler
