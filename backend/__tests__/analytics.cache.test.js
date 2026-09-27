@@ -40,6 +40,9 @@ jest.mock("redis", () => {
   };
 });
 
+// Mock the Stellar service so analytics functions do not hit the network.
+jest.mock("../src/services/stellarService");
+
 // Ensure REDIS_URL is set so cache.js picks the Redis path at load time.
 process.env.REDIS_URL = "redis://localhost:6379";
 process.env.ANALYTICS_CACHE_TTL_MS = "300000";
@@ -84,7 +87,10 @@ describe("Analytics Cache - Redis Integration (#1072)", () => {
    * before assertions run.
    */
   beforeAll(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    const deadline = Date.now() + 500;
+    while (!cache.isUsingRedis() && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
   });
 
   beforeEach(() => {
@@ -180,5 +186,38 @@ describe("Analytics Cache - Redis Integration (#1072)", () => {
     );
     expect(setExKeys).toContain(`summary:${testPublicKey}`);
     expect(setExKeys).toContain(`top-recipients:${otherKey}`);
+  });
+});
+
+describe("Analytics Cache - In-Memory Fallback (#1072)", () => {
+  it("should fall back to in-memory when REDIS_URL is not set", async () => {
+    delete process.env.REDIS_URL;
+    delete process.env.ANALYTICS_CACHE_TTL_MS;
+
+    let isolatedService;
+    let isolatedStellar;
+    let isolatedCache;
+
+    jest.isolateModules(() => {
+      isolatedStellar = require("../src/services/stellarService");
+      isolatedStellar.getPayments = jest
+        .fn()
+        .mockResolvedValue(mockPayments);
+      isolatedService = require("../src/services/analyticsService");
+      isolatedCache = require("../src/services/cache");
+    });
+
+    // Redis was never initialised
+    expect(isolatedCache.isUsingRedis()).toBe(false);
+
+    // First call — in-memory cache miss, fetches from service
+    const result1 = await isolatedService.getSummary(testPublicKey);
+    expect(isolatedStellar.getPayments).toHaveBeenCalledTimes(1);
+    expect(result1.publicKey).toBe(testPublicKey);
+
+    // Second call — in-memory cache hit
+    const result2 = await isolatedService.getSummary(testPublicKey);
+    expect(isolatedStellar.getPayments).toHaveBeenCalledTimes(1); // still 1
+    expect(result2).toEqual(result1);
   });
 });
