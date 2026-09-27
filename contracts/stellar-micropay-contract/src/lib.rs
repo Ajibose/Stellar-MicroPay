@@ -21,10 +21,21 @@
  *     --network testnet
  */
 
-use soroban_sdk::{
-    contract, contractimpl, contracttype,
-    token, Address, Env, Symbol,
-};
+use soroban_sdk::{contract, contractimpl, contractmeta, contracttype, token, Address, Env, Symbol};
+
+// On-chain metadata for discovery and tooling (see `stellar contract inspect`).
+// The `version` key is wired to the package version in Cargo.toml so the two
+// can never drift apart.
+contractmeta!(key = "name", val = "Stellar MicroPay");
+contractmeta!(key = "version", val = env!("CARGO_PKG_VERSION"));
+contractmeta!(
+    key = "homepage",
+    val = "https://github.com/Emmy123222/Stellar-MicroPay"
+);
+contractmeta!(
+    key = "description",
+    val = "Streaming payment channels with tipping, escrow, and NFT receipts for micro-payments on Stellar"
+);
 
 // ─── Data types ───────────────────────────────────────────────────────────────
 
