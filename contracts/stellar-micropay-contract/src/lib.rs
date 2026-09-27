@@ -336,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mint_receipt() {
+    fn test_mint_receipt_stores_receipt_record_accessible_via_get_receipt() {
         let env = Env::default();
         let contract_id = env.register_contract(None, MicroPayContract);
         let client = MicroPayContractClient::new(&env, &contract_id);
@@ -360,10 +360,11 @@ mod tests {
         assert_eq!(stored.to, payee);
         assert_eq!(stored.amount, 1000);
         assert_eq!(stored.memo, memo);
+        assert_eq!(stored.ledger, env.ledger().sequence());
     }
 
     #[test]
-    fn test_receipt_count_tracks_multiple_mints() {
+    fn test_mint_two_receipts_from_same_payer_increments_count() {
         let env = Env::default();
         let contract_id = env.register_contract(None, MicroPayContract);
         let client = MicroPayContractClient::new(&env, &contract_id);
@@ -383,7 +384,30 @@ mod tests {
         assert_eq!(id1, 0);
         assert_eq!(id2, 1);
         assert_eq!(client.get_receipt_count(&payer), 2);
+
+        let receipt1 = client.get_receipt(&payer, &0);
+        assert_eq!(receipt1.to, payee1);
+        assert_eq!(receipt1.amount, 500);
+
+        let receipt2 = client.get_receipt(&payer, &1);
+        assert_eq!(receipt2.to, payee2);
+        assert_eq!(receipt2.amount, 1500);
     }
+
+    #[test]
+    #[should_panic(expected = "Receipt not found")]
+    fn test_get_receipt_out_of_range_panics_gracefully() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let payer = Address::generate(&env);
+        client.get_receipt(&payer, &0); // No receipts minted yet -> panics
+    }
+
 
     #[test]
     fn test_tip_totals_start_at_zero() {
