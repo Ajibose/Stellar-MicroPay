@@ -7,9 +7,16 @@
 
 const express = require("express");
 const router = express.Router();
-const { paymentLimiter } = require("../middleware/rateLimit");
+const { strictLimiter } = require("../middleware/rateLimit");
 const { sanitizePublicKey } = require("../middleware/sanitization");
 const paymentController = require("../controllers/paymentController");
+
+/**
+ * GET /api/payments/stream-status/:streamId
+ * Return status of a Soroban streaming payment contract.
+ * Must be defined before :publicKey to avoid route conflicts.
+ */
+router.get("/stream-status/:streamId", strictLimiter, paymentController.getStreamStatus);
 
 /**
  * GET /api/payments/:publicKey
@@ -19,12 +26,12 @@ const paymentController = require("../controllers/paymentController");
  *   limit  — number of results (default: 20, max: 100)
  *   cursor — pagination cursor
  */
-router.get("/:publicKey", paymentLimiter, sanitizePublicKey, paymentController.getPayments);
+router.get("/:publicKey", strictLimiter, sanitizePublicKey, paymentController.getPayments);
 
 /**
  * GET /api/payments/:publicKey/stats
  * Return aggregate stats for an account (total sent, received, count).
  */
-router.get("/:publicKey/stats", paymentLimiter, paymentController.getStats);
+router.get("/:publicKey/stats", paymentController.getStats);
 
 module.exports = router;

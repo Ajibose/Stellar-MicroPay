@@ -122,7 +122,7 @@ function getTipsStats(creatorPublicKey) {
   if (tips.length > 0) {
     const totalAmount = tips.reduce((sum, tip) => sum + parseFloat(tip.amount), 0);
     stats.averageTip = String(totalAmount / tips.length);
-    
+
     const amounts = tips.map(t => parseFloat(t.amount));
     stats.largestTip = String(Math.max(...amounts));
     stats.smallestTip = String(Math.min(...amounts));
@@ -203,51 +203,10 @@ function validateTipInput(data) {
   return true;
 }
 
-/**
- * Get top tippers for a creator.
- * @param {string} creatorPublicKey - The creator's public key
- * @param {number} limit - The number of tippers to return
- * @returns {Array} Sorted array of top tippers
- */
-function getTopTippers(creatorPublicKey, limit = 5) {
-  if (!creatorPublicKey) {
-    const error = new Error("creatorPublicKey is required");
-    error.status = 400;
-    throw error;
-  }
-
-  const tips = tipsByCreator.get(creatorPublicKey) || [];
-  
-  // Aggregate total tipped per sender
-  const totals = new Map();
-  for (const tip of tips) {
-    const sender = tip.senderPublicKey;
-    const amount = parseFloat(tip.amount) || 0;
-    totals.set(sender, (totals.get(sender) || 0) + amount);
-  }
-
-  // Convert to array
-  const entries = Array.from(totals.entries()).map(([senderPublicKey, totalAmount]) => ({
-    senderPublicKey,
-    totalAmount: totalAmount.toFixed(7),
-  }));
-
-  // Sort descending by amount
-  // If there are ties, JavaScript's stable sort (or standard array sorting) preserves order
-  entries.sort((a, b) => parseFloat(b.totalAmount) - parseFloat(a.totalAmount));
-
-  // Limit result count
-  const result = entries.slice(0, limit);
-
-  return result;
-}
-
 module.exports = {
   recordTip,
   getTipsReceived,
   getTipsStats,
   getTipsSent,
   validateTipInput,
-  getTopTippers,
-  tipsByCreator,
 };

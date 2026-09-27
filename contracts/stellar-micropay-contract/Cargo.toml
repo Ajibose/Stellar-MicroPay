@@ -7,22 +7,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-# Soroban SDK for Stellar smart contract development
-# Latest stable version pinned for security and stability
-soroban-sdk = "27.0.3"
+soroban-sdk = "28.0.0"
 
 [dev-dependencies]
-# Testing utilities from Soroban SDK
-soroban-sdk = { version = "27.0.3", features = ["testutils"] }
-# Property-based fuzzing harness for stream operation sequences (#563)
-proptest = "1"
-
-# Dependency Audit Notes (Issue #637):
-# - soroban-sdk 23.0.2 (last audited 2026-07-26). Moved off 20.0.0 because its
-#   pinned transitive deps (ethnum 1.5.0) no longer build on current stable
-#   Rust, which is what was failing the contracts CI job.
-# - Cargo.lock is committed so CI, local and release builds resolve identically
-# - No duplicate transitive dependencies found
-# - All dependencies are up-to-date with no security advisories
-# - Consider running 'cargo audit' periodically to check for security updates
-
+soroban-sdk = { version = "28.0.0", features = ["testutils"] }
