@@ -2,46 +2,43 @@
  * src/services/analyticsService.js
  * Business logic for transaction volume analytics.
  * Fetches payment data from Horizon and computes aggregated insights.
- * Includes in-memory caching with 5-minute TTL.
+ * Includes Redis-backed caching with 5-minute TTL (falls back to in-memory).
  */
 
 "use strict";
 
+const cache = require("./cache");
 const stellarService = require("./stellarService");
 
 // ─── Cache Configuration ──────────────────────────────────────────────────────
-
-const CACHE_TTL = 60 * 1000; // 60 seconds in milliseconds
-const cache = new Map();
-
-// Periodically clean up expired cache entries to prevent memory leaks
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, value] of cache.entries()) {
-    if (now - value.timestamp >= CACHE_TTL) {
-      cache.delete(key);
-    }
-  }
-}, Math.max(CACHE_TTL, 60000)).unref();
+//
+// The cache layer (src/services/cache.js) uses Redis when REDIS_URL is set and
+// falls back to an in-process Map otherwise. TTL is configurable via
+// ANALYTICS_CACHE_TTL_MS (default 5 minutes).
 
 /**
  * Cache wrapper function.
+ *
+ * On a cache miss the factory function `fn` is invoked and its return value
+ * is stored for reuse on the next call with the same key.
+ *
  * @param {string} key
  * @param {Function} fn - async function that returns the data
+ * @returns {Promise<*>}
  */
 async function withCache(key, fn) {
-  const cached = cache.get(key);
+  const cached = await cache.get(key);
 
   // Return cached data if still fresh
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    return cached.data;
+  if (cached !== null) {
+    return cached;
   }
 
   // Fetch fresh data
   const data = await fn();
 
   // Update cache
-  cache.set(key, { data, timestamp: Date.now() });
+  await cache.set(key, data);
 
   return data;
 }
@@ -534,26 +531,18 @@ async function triggerEmailExport(publicKey) {
 
 /**
  * Clear cache for a specific public key (optional helper).
- * Useful for manual cache invalidation if needed.
+ *
+ * Removes every cache entry whose key starts with one of the analytics
+ * prefixes for `publicKey` — summary, top-recipients, activity, and cohorts.
+ *
+ * @param {string} publicKey
+ * @returns {Promise<void>}
  */
-function clearCache(publicKey) {
-  for (const key of cache.keys()) {
-    if (key.startsWith(`summary:${publicKey}`)) {
-      cache.delete(key);
-      continue;
-    }
-    if (key.startsWith(`top-recipients:${publicKey}`)) {
-      cache.delete(key);
-      continue;
-    }
-    if (key.startsWith(`activity:${publicKey}`)) {
-      cache.delete(key);
-      continue;
-    }
-    if (key.startsWith(`cohorts:${publicKey}`)) {
-      cache.delete(key);
-    }
-  }
+async function clearCache(publicKey) {
+  await cache.clearByPrefix(`summary:${publicKey}`);
+  await cache.clearByPrefix(`top-recipients:${publicKey}`);
+  await cache.clearByPrefix(`activity:${publicKey}`);
+  await cache.clearByPrefix(`cohorts:${publicKey}`);
 }
 
 module.exports = {
@@ -565,4 +554,6 @@ module.exports = {
   scheduleExport,
   getExportSchedule,
   triggerEmailExport,
+  withCache,
+  cache,
 };

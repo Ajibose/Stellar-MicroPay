@@ -1,6 +1,21 @@
 version: "3.9"
 
 services:
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    volumes:
+      - redis_data:/data
+    restart: always
+    networks:
+      - backend
+
   nginx:
     image: nginx:alpine
     ports:
@@ -50,6 +65,11 @@ services:
       - ALLOWED_ORIGINS=https://staging.stellarmicropay.io
       - FEDERATION_DOMAIN=stellarmicropay.io
       - FEDERATION_DOMAINS=stellarmicropay.io,stellarmicropay.com
+      - REDIS_URL=redis://redis:6379
+      - ANALYTICS_CACHE_TTL_MS=300000
+    depends_on:
+      redis:
+        condition: service_started
     secrets:
       - jwt_secret
       - server_private_key
@@ -65,6 +85,7 @@ services:
 
 volumes:
   frontend_static:
+  redis_data:
 
 secrets:
   jwt_secret:

@@ -33,6 +33,9 @@
     "swagger-jsdoc": "^6.3.0",
     "swagger-ui-express": "^5.0.1"
   },
+  "optionalDependencies": {
+    "redis": "^4.7.1"
+  },
   "devDependencies": {
     "eslint": "^8.57.0",
     "eslint-config-prettier": "9.1.0",

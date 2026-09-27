@@ -19,6 +19,8 @@ These environment variables configure the backend Express application. Several v
 | `FEDERATION_DOMAINS` | `stellarmicropay.io,stellarmicropay.com` | No | Backend | Comma-separated list of secondary domains allowed for federation lookups. |
 | `FEDERATION_SERVER_URL`| *Derived* | No | Backend | Optional override URL of the federation server. Defaults to `https://<FEDERATION_DOMAIN>/federation`. |
 | `SENTRY_DSN` | *None* | No | Backend | Data Source Name for Sentry error tracking integration in the backend service. |
+| `REDIS_URL` | `redis://redis:6379` | No | Backend | Redis connection URL for the analytics cache. Leave unset to use the in-memory fallback (suitable for single-instance deployments). |
+| `ANALYTICS_CACHE_TTL_MS` | `300000` (5 min) | No | Backend | Cache TTL for analytics data in milliseconds. Controls how long cached results are considered fresh. |
 
 ---
 
