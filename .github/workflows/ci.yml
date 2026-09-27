@@ -80,6 +80,23 @@ jobs:
           path: target/wasm32v1-none/release/stellar_micropay_contract.wasm
           if-no-files-found: error
 
+  integration-test:
+    name: Integration tests (docker-compose)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and run integration tests
+        run: |
+          docker compose -f docker-compose.test.yml up \
+            --build \
+            --abort-on-container-exit \
+            --exit-code-from backend-test
+
+      - name: Tear down containers
+        if: always()
+        run: docker compose -f docker-compose.test.yml down --volumes --remove-orphans
+
   e2e:
     name: Browser smoke (Playwright)
     runs-on: ubuntu-latest
