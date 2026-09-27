@@ -15,7 +15,11 @@ jobs:
     name: Repository integrity
     runs-on: ubuntu-latest
     steps:
+      # Full history so `git diff --check HEAD^` has a parent to diff against
+      # (checkout's default fetch-depth: 1 makes HEAD^ unavailable).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Reject whitespace errors and unresolved conflicts
         run: |
           git diff --check HEAD^
@@ -71,9 +75,21 @@ jobs:
         with:
           targets: wasm32v1-none
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --target wasm32v1-none
+      # soroban-sdk 28 refuses plain `cargo build --target wasm32v1-none`
+      # unless the build system performs spec shaking (stellar-cli >= 25.2
+      # sets SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2), so the wasm
+      # artifact must be produced with `stellar contract build`.
+      - name: Install Stellar CLI
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSfL \
+            https://github.com/stellar/stellar-cli/releases/download/v28.1.0/stellar-cli-28.1.0-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz
+          sudo install -m 0755 stellar /usr/local/bin/stellar
+          stellar --version
+      - run: cargo check
       - run: cargo test
-      - run: cargo build --target wasm32v1-none --release
+      - name: Build WASM
+        run: stellar contract build --profile release
       - uses: actions/upload-artifact@v4
         with:
           name: stellar-micropay-contract-wasm
