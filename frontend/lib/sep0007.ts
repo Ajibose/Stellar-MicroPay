@@ -25,6 +25,22 @@ export interface URIParseResult {
   isExternal?: boolean; // Whether this came from an external URI handler
 }
 
+/** Build a SEP-0007 payment URI from the required destination and optional fields. */
+export function buildSep0007Uri(input: {
+  destination: string;
+  amount?: string;
+  memo?: string;
+  assetCode?: string;
+  assetIssuer?: string;
+}): string {
+  const params = new URLSearchParams({ destination: input.destination });
+  if (input.amount) params.set('amount', input.amount);
+  if (input.memo) params.set('memo', input.memo);
+  if (input.assetCode) params.set('asset_code', input.assetCode);
+  if (input.assetIssuer) params.set('asset_issuer', input.assetIssuer);
+  return `stellar:pay?${params.toString()}`;
+}
+
 /**
  * Parse a SEP-0007 URI string
  * Supports both stellar:pay and web+stellar:pay formats
