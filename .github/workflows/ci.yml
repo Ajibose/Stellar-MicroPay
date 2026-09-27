@@ -39,6 +39,8 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      - name: Audit dependencies (fails on high/critical)
+        run: npm audit --audit-level=high
       - run: npm run type-check
       - run: npm run lint
       - run: npm test
@@ -63,12 +65,17 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
+      - name: Audit dependencies (fails on high/critical)
+        run: npm audit --audit-level=high
       - run: npm run lint
       - run: npm test
 
   contracts:
     name: Soroban contract (check, test, WASM)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
     # soroban-sdk 28's build script only accepts a wasm build when the build
     # system declares that spec shaking happens out-of-band
     # (SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2). `cargo check` and
@@ -83,6 +90,14 @@ jobs:
         with:
           targets: wasm32v1-none
       - uses: Swatinem/rust-cache@v2
+      # Scans the workspace Cargo.lock, which pins the contract at
+      # contracts/stellar-micropay-contract. cargo audit has no severity
+      # threshold like npm's --audit-level, so it fails on any vulnerability
+      # advisory (unmaintained-crate notices are reported as warnings only).
+      - name: Audit contract dependencies (fails on any vulnerability)
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
       - name: cargo check (wasm32v1-none)
         run: cargo check --target wasm32v1-none
       - run: cargo test
