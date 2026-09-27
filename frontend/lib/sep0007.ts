@@ -31,8 +31,8 @@ export interface URIParseResult {
  */
 export function parseStellarURI(uri: string): URIParseResult {
   try {
-    // Handle both stellar:pay and web+stellar:pay
-    const stellarRegex = /^(?:web\+)?stellar:pay\?(.+)$/;
+    // Handle stellar:pay and web+stellar:pay (including // variant)
+    const stellarRegex = /^(?:web\+)?stellar:(?:\/\/)?pay\?(.+)$/;
     const match = uri.match(stellarRegex);
 
     if (!match) {
@@ -118,7 +118,7 @@ export function parseStellarURI(uri: string): URIParseResult {
     return {
       success: true,
       data: result,
-      isExternal: uri.startsWith('web+stellar:')
+      isExternal: uri.startsWith('web+stellar:') || uri.startsWith('web+stellar://')
     };
   } catch (error) {
     return {
@@ -159,13 +159,34 @@ export function registerProtocolHandler(): void {
   }
 }
 
+export interface PrefillData {
+  destination: string;
+  amount: string;
+  memo: string;
+}
+
 /**
- * Convert parsed URI to prefill data for SendPaymentForm
+ * Convert parsed URI or URI string to prefill data for SendPaymentForm
  */
-export function uriToPrefillData(parsed: ParsedStellarURI) {
+export function uriToPrefillData(parsed: ParsedStellarURI): PrefillData;
+export function uriToPrefillData(uri: string): PrefillData | null;
+export function uriToPrefillData(input: ParsedStellarURI | string): PrefillData | null;
+export function uriToPrefillData(input: ParsedStellarURI | string): PrefillData | null {
+  if (typeof input === 'string') {
+    const parseResult = parseStellarURI(input);
+    if (!parseResult.success || !parseResult.data) {
+      return null;
+    }
+    return {
+      destination: parseResult.data.destination,
+      amount: parseResult.data.amount || '',
+      memo: parseResult.data.memo || ''
+    };
+  }
+
   return {
-    destination: parsed.destination,
-    amount: parsed.amount || '',
-    memo: parsed.memo || ''
+    destination: input.destination,
+    amount: input.amount || '',
+    memo: input.memo || ''
   };
 }
