@@ -9,6 +9,7 @@ const express = require("express");
 const router = express.Router();
 const { strictLimiter } = require("../middleware/rateLimit");
 const { sanitizePublicKey, sanitizeUsername } = require("../middleware/sanitization");
+const { verifyJWT } = require("../middleware/auth");
 const accountController = require("../controllers/accountController");
 
 /**
@@ -29,6 +30,13 @@ router.get("/:publicKey", strictLimiter, sanitizePublicKey, accountController.ge
  * Fetch just the XLM balance for an account.
  */
 router.get("/:publicKey/balance", strictLimiter, sanitizePublicKey, accountController.getBalance);
+
+/**
+ * GET /api/accounts/:publicKey/assets
+ * List all non-native asset trustlines (code, issuer, balance, limit) (#1065).
+ * Requires a valid SEP-0010 JWT.
+ */
+router.get("/:publicKey/assets", strictLimiter, verifyJWT, sanitizePublicKey, accountController.getAccountAssets);
 
 /**
  * POST /api/accounts/register
