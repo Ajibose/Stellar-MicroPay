@@ -238,6 +238,24 @@ export default function SendPaymentForm({
   });
 
   const [isFavouritesDropdownOpen, setIsFavouritesDropdownOpen] = useState(false);
+  const [activeSuggestion, setActiveSuggestion] = useState(0);
+  const contactSuggestions = hideDestinationField
+    ? []
+    : favourites
+        .filter(
+          (f) =>
+            destination.length > 0 &&
+            (f.name.toLowerCase().includes(destination.toLowerCase()) ||
+              f.address.startsWith(destination))
+        )
+        .slice(0, 5);
+  const handleDestinationKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!contactSuggestions.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setActiveSuggestion((i) => (i + 1) % contactSuggestions.length); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActiveSuggestion((i) => (i - 1 + contactSuggestions.length) % contactSuggestions.length); }
+    else if (e.key === "Enter" && contactSuggestions[activeSuggestion]) { e.preventDefault(); setDestination(contactSuggestions[activeSuggestion].address); setActiveSuggestion(0); }
+    else if (e.key === "Escape") { setActiveSuggestion(0); setDestination(""); }
+  };
   const [isManageModalOpen, setIsManageModalOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -332,7 +350,7 @@ export default function SendPaymentForm({
   const balance = selectedAsset === "XLM" ? xlmBal : usdcBal;
   const maxSend =
     selectedAsset === "XLM"
-      ? Math.max(0, xlmBal - STELLAR_MINIMUM_ACCOUNT_BALANCE_XLM)
+      ? Math.max(0, xlmBal - STELLAR_MINIMUM_ACCOUNT_BALANCE_XLM - networkFeeXlm)
       : usdcBal;
 
   const amountNum = parseFloat(amount);
@@ -668,10 +686,32 @@ export default function SendPaymentForm({
               type="text"
               value={destination}
               onChange={(e) => setDestination(e.target.value)}
+              onKeyDown={handleDestinationKeyDown}
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={contactSuggestions.length > 0}
+              aria-controls="destination-suggestions"
               placeholder="G... or @username"
               className={clsx("input-field font-mono text-sm", destination && !isValidDest && !isUsernameDestination && "border-red-500/50")}
               disabled={status !== "idle" || destinationReadOnly}
             />
+
+            {contactSuggestions.length > 0 && (
+              <ul id="destination-suggestions" role="listbox" aria-label="Contact suggestions" className="absolute left-0 right-0 z-50 mt-1 max-h-60 overflow-y-auto rounded-xl border border-white/10 bg-slate-900 p-1 shadow-2xl">
+                {contactSuggestions.map((item, index) => (
+                  <li key={item.address} role="option" aria-selected={index === activeSuggestion}>
+                    <button
+                      type="button"
+                      onClick={() => { setDestination(item.address); setActiveSuggestion(0); }}
+                      className={clsx("flex w-full flex-col items-start rounded-lg px-3 py-2 text-left", index === activeSuggestion ? "bg-white/5" : "hover:bg-white/5")}
+                    >
+                      <span className="text-sm font-medium text-slate-200">{item.name}</span>
+                      <span className="text-xs text-slate-500">{shortenAddress(item.address, 8)}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
 
             {isFavouritesDropdownOpen && favourites.length > 0 && (
               <div className="absolute left-0 right-0 z-50 mt-1 max-h-60 overflow-y-auto rounded-xl border border-white/10 bg-slate-900 p-1 shadow-2xl">
@@ -695,8 +735,8 @@ export default function SendPaymentForm({
           <div>
             <div className="mb-2 flex items-center justify-between">
               <label className="label mb-0">Amount ({selectedAsset})</label>
-              <button type="button" onClick={setMaxAmount} className="text-xs text-stellar-400 hover:text-stellar-300" disabled={status !== "idle"}>
-                Max: {formatXLM(maxSend)}
+              <button type="button" onClick={setMaxAmount} className="text-xs text-stellar-400 hover:text-stellar-300" disabled={status !== "idle"} title="Send Max: balance - 1 XLM base reserve - subentry reserves - current network fee">
+                Send Max: {formatXLM(maxSend)}
               </button>
             </div>
             <input
