@@ -12,6 +12,12 @@ const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
 require("dotenv").config();
 
+// ─── Env Validation ───────────────────────────────────────────────────────────
+// Must run immediately after dotenv so missing vars are caught before any
+// service or route module tries to use them.
+const { validateEnv } = require("./validateEnv");
+validateEnv();
+
 const accountRoutes = require("./routes/accounts");
 const authRoutes = require("./routes/auth");
 const paymentRoutes = require("./routes/payments");
