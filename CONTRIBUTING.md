@@ -137,6 +137,7 @@ chore: upgrade stellar-sdk to latest
 
 ### PR checklist
 
+- Keep each pull request focused on its linked issue.
 - [ ] My code follows the project's style
 - [ ] I've tested my changes locally
 - [ ] I've updated documentation if needed
