@@ -19,6 +19,7 @@ import {
 } from "@/lib/wallet";
 import { useWallet } from "@/lib/useWallet";
 import { useTheme } from "@/pages/_app";
+import { copyToClipboard } from "@/utils/format";
 
 const navLinks = [
   { href: "/", label: "Home" },
@@ -34,7 +35,17 @@ export default function Navbar() {
   const { publicKey, connectWallet, disconnectWallet } = useWallet();
   const { theme, toggleTheme } = useTheme();
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [feeLevel, setFeeLevel] = useState<FeeLevel | null>(null);
+
+  const handleCopyAddress = async () => {
+    if (!publicKey) return;
+    const ok = await copyToClipboard(publicKey);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
   const config = getNetworkConfig();
   const isMainnet = config.network === "mainnet";
   const networkLabel =
@@ -172,9 +183,29 @@ export default function Navbar() {
                 Ctrl+K
               </kbd>
 
-              <div className="address-pill flex items-center gap-2">
+              <div className="address-pill relative flex items-center gap-1.5">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
                 <span>{shortenAddress(publicKey)}</span>
+                <button
+                  onClick={handleCopyAddress}
+                  aria-label="Copy wallet address"
+                  title="Copy wallet address"
+                  className="flex items-center justify-center p-0.5 text-slate-400 hover:text-white transition-colors cursor-pointer rounded"
+                >
+                  {copied ? (
+                    <CheckIcon className="h-3.5 w-3.5 text-emerald-400" />
+                  ) : (
+                    <ClipboardIcon className="h-3.5 w-3.5" />
+                  )}
+                </button>
+                {copied && (
+                  <span
+                    className="absolute -bottom-8 left-1/2 -translate-x-1/2 rounded bg-slate-800 px-2 py-0.5 text-[10px] font-medium text-emerald-400 border border-emerald-400/20 shadow-md animate-fade-in z-50 whitespace-nowrap"
+                    role="status"
+                  >
+                    Copied!
+                  </span>
+                )}
               </div>
               <button
                 onClick={() => setShowDisconnectConfirm(true)}
@@ -263,3 +294,38 @@ function SunIcon() {
     </svg>
   );
 }
+
+function ClipboardIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      className={className || "h-3.5 w-3.5"}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M8 5a2 2 0 002 2h4a2 2 0 002-2M8 5a2 2 0 012-2h4a2 2 0 012 2"
+      />
+    </svg>
+  );
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      className={className || "h-3.5 w-3.5"}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+    </svg>
+  );
+}
+
