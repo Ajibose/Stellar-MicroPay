@@ -4,6 +4,7 @@
  *
  * GET  /api/auth?account=G... → returns a challenge transaction
  * POST /api/auth              → verifies signed challenge, returns JWT
+ * GET  /api/auth/csrf         → issues a CSRF double-submit token
  */
 "use strict";
 
@@ -11,6 +12,7 @@ const express = require("express");
 const jwt     = require("jsonwebtoken");
 const { Utils, Keypair } = require("@stellar/stellar-sdk");
 const { JWT_SECRET } = require("../middleware/auth");
+const { setCsrfCookie } = require("../middleware/csrf");
 
 const router = express.Router();
 
@@ -29,6 +31,14 @@ function getServerKeypair() {
   }
   return cachedServerKeypair;
 }
+
+// GET /api/auth/csrf — issue a CSRF double-submit token.
+// Clients call this once (with credentials) before making state-changing
+// requests; they then echo the token back in the X-CSRF-Token header.
+router.get("/csrf", (req, res) => {
+  const csrfToken = setCsrfCookie(res);
+  res.json({ csrfToken });
+});
 
 // GET /api/auth?account=G... — issue a SEP-0010 challenge transaction
 router.get("/", (req, res) => {
@@ -78,7 +88,10 @@ router.post("/", (req, res) => {
       maxAge:   24 * 60 * 60 * 1000,
     });
 
-    res.json({ success: true, token });
+    // Establish the readable double-submit token alongside the session.
+    const csrfToken = setCsrfCookie(res);
+
+    res.json({ success: true, token, csrfToken });
   } catch (e) {
     res.status(401).json({ error: "Unauthorized: " + e.message });
   }

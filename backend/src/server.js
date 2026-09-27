@@ -23,6 +23,7 @@ const tipsRoutes = require("./routes/tips");
 const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./swagger");
 const { startTurretsServer } = require("./turretsServer");
+const { csrfProtection } = require("./middleware/csrf");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -57,10 +58,20 @@ app.use(
       }
     },
     methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token"],
     credentials: true,
   })
 );
+
+// ─── CSRF Protection ────────────────────────────────────────────────────────
+// Double-submit cookie verification for state-changing requests. The SEP-0010
+// auth endpoints bootstrap the token/session and must stay reachable without
+// one, so they are exempt. See src/middleware/csrf.js and the analysis in
+// src/middleware/auth.js.
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api/auth")) return next();
+  return csrfProtection(req, res, next);
+});
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
