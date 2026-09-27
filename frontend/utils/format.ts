@@ -287,3 +287,59 @@ export function exportToJSON(payments: PaymentRecord[]): void {
   const json = JSON.stringify(payments, null, 2);
   triggerDownload(json, filename, "application/json;charset=utf-8;");
 }
+
+/**
+ * Export the currently filtered and loaded transactions as CSV (Issue #1046).
+ *
+ * Unlike the page-level full-history export, this exports exactly the rows
+ * the user sees — the filtered set of loaded records — so accounting exports
+ * match what is on screen.
+ *
+ * Columns: date, type (sent/received), amount, asset, counterparty, memo,
+ * tx_hash. Filename: `stellar-transactions-<publicKey-short>-<date>.csv`.
+ */
+export function exportFilteredTransactionsToCSV(
+  payments: PaymentRecord[],
+  publicKey: string
+): void {
+  const HEADERS = [
+    "Date",
+    "Type",
+    "Amount",
+    "Asset",
+    "Counterparty",
+    "Memo",
+    "Tx Hash",
+  ];
+
+  const rows = payments.map((tx) => [
+    csvCell(format(new Date(tx.createdAt), "yyyy-MM-dd HH:mm:ss")),
+    csvCell(tx.type === "sent" ? "sent" : "received"),
+    csvCell(parseFloat(tx.amount).toFixed(7)),
+    csvCell(tx.asset ?? "XLM"),
+    // The counterparty is the other side of the payment relative to the
+    // exporting account.
+    csvCell(tx.type === "sent" ? tx.to : tx.from),
+    csvCell(tx.memo ?? ""),
+    csvCell(tx.transactionHash),
+  ]);
+
+  const csv = [
+    HEADERS.map(csvCell).join(","),
+    ...rows.map((r) => r.join(",")),
+  ].join("\r\n");
+
+  triggerDownload(csv, buildTransactionsCsvFilename(publicKey), "text/csv;charset=utf-8;");
+}
+
+/**
+ * Builds the issue-#1046 filename:
+ * `stellar-transactions-<publicKey-short>-<date>.csv` where
+ * `<publicKey-short>` is the first 4 characters of the account's public key.
+ * `now` is injectable so tests can assert the date stamp deterministically.
+ */
+export function buildTransactionsCsvFilename(publicKey: string, now: Date = new Date()): string {
+  const shortKey = (publicKey || "account").slice(0, 4).replace(/[^a-zA-Z0-9]/g, "");
+  const dateStamp = format(now, "yyyy-MM-dd");
+  return `stellar-transactions-${shortKey}-${dateStamp}.csv`;
+}
