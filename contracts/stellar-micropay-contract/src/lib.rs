@@ -12,19 +12,17 @@
  *   - NFT payment receipts (ROADMAP v1.5)
  *
  * Build:
- *   cargo build --target wasm32-unknown-unknown --release
+ *   stellar contract build
+ *   (or: cargo build --target wasm32v1-none --release from the workspace root;
+ *    the wasm32-unknown-unknown target is unsupported by soroban-sdk 28)
  *
  * Deploy (Stellar CLI):
  *   stellar contract deploy \
- *     --wasm target/wasm32-unknown-unknown/release/stellar_micropay_contract.wasm \
+ *     --wasm target/wasm32v1-none/release/stellar_micropay_contract.wasm \
  *     --source YOUR_SECRET_KEY \
  *     --network testnet
  */
-
-use soroban_sdk::{
-    contract, contractimpl, contracttype,
-    token, Address, Env, Symbol,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Symbol};
 
 // ─── Data types ───────────────────────────────────────────────────────────────
 
@@ -81,16 +79,20 @@ pub struct MicroPayContract;
 
 #[contractimpl]
 impl MicroPayContract {
-
     // ─── Initialization ──────────────────────────────────────────────────────
 
     /// Initialize the contract with an admin address.
     /// Can only be called once.
+    ///
+    /// The admin must authorize this call so the stored admin address can
+    /// never be set to a value the admin itself did not sign off on (this
+    /// also makes front-running the deployer's initialization useless).
     pub fn initialize(env: Env, admin: Address) {
         // Ensure not already initialized
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("Contract already initialized");
         }
+        admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
     }
 
@@ -105,20 +107,17 @@ impl MicroPayContract {
     ///   - amount:        Amount in the token's smallest unit (stroops for XLM)
     ///
     /// This records the tip on-chain for analytics and emits an event.
-    pub fn send_tip(
-        env: Env,
-        token_address: Address,
-        from: Address,
-        to: Address,
-        amount: i128,
-    ) {
-        // Require sender authorization
-        from.require_auth();
-
-        // Validate amount
+    pub fn send_tip(env: Env, token_address: Address, from: Address, to: Address, amount: i128) {
+        // Validate amount before requesting authorization so that a failed
+        // call can never double as a cross-contract authorization for `from`
+        // (a failing require_auth does not roll back sibling effects in the
+        // same transaction when this contract is called by another contract).
         if amount <= 0 {
             panic!("Tip amount must be positive");
         }
+
+        // Require sender authorization
+        from.require_auth();
 
         // Transfer tokens via the Stellar token interface (SAC)
         let token = token::Client::new(&env, &token_address);
@@ -157,10 +156,8 @@ impl MicroPayContract {
             .set(&DataKey::TipRecord(to.clone(), current_count), &record);
 
         // Emit an event for indexers
-        env.events().publish(
-            (Symbol::new(&env, "tip"), from, to.clone()),
-            amount,
-        );
+        env.events()
+            .publish((Symbol::new(&env, "tip"), from, to.clone()), amount);
     }
 
     // ─── Getters ─────────────────────────────────────────────────────────────
@@ -210,18 +207,13 @@ impl MicroPayContract {
     ///   - to:     The payee
     ///   - amount: Amount in stroops
     ///   - memo:   Optional payment memo (max 28 chars, passed as a Symbol)
-    pub fn mint_receipt(
-        env: Env,
-        from: Address,
-        to: Address,
-        amount: i128,
-        memo: Symbol,
-    ) -> u32 {
-        from.require_auth();
-
+    pub fn mint_receipt(env: Env, from: Address, to: Address, amount: i128, memo: Symbol) -> u32 {
+        // Validate amount before requesting authorization (see `send_tip`).
         if amount <= 0 {
             panic!("Receipt amount must be positive");
         }
+
+        from.require_auth();
 
         let count: u32 = env
             .storage()
@@ -246,10 +238,8 @@ impl MicroPayContract {
             .instance()
             .set(&DataKey::ReceiptCount(from.clone()), &(count + 1));
 
-        env.events().publish(
-            (Symbol::new(&env, "receipt"), from),
-            count,
-        );
+        env.events()
+            .publish((Symbol::new(&env, "receipt"), from), count);
 
         count
     }
@@ -308,7 +298,7 @@ mod tests {
     use super::*;
     use soroban_sdk::{
         testutils::{Address as _, AuthorizedFunction, AuthorizedInvocation},
-        Address, Env,
+        Address, Env, IntoVal, TryFromVal,
     };
 
     #[test]
@@ -318,9 +308,39 @@ mod tests {
         let client = MicroPayContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
+        env.mock_all_auths();
+
         client.initialize(&admin);
 
         assert_eq!(client.get_admin(), admin);
+    }
+
+    #[test]
+    fn test_initialize_requires_admin_auth() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        env.mock_all_auths();
+
+        client.initialize(&admin);
+
+        // The admin must be the (only) authorizer of `initialize`.
+        assert_eq!(
+            env.auths(),
+            [(
+                admin.clone(),
+                AuthorizedInvocation {
+                    function: AuthorizedFunction::Contract((
+                        client.address.clone(),
+                        Symbol::new(&env, "initialize"),
+                        (admin.clone(),).into_val(&env)
+                    )),
+                    sub_invocations: [].into(),
+                }
+            )]
+        );
     }
 
     #[test]
@@ -331,6 +351,7 @@ mod tests {
         let client = MicroPayContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
+        env.mock_all_auths();
         client.initialize(&admin);
         client.initialize(&admin); // should panic
     }
@@ -342,6 +363,7 @@ mod tests {
         let client = MicroPayContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
+        env.mock_all_auths();
         client.initialize(&admin);
 
         let payer = Address::generate(&env);
@@ -369,13 +391,12 @@ mod tests {
         let client = MicroPayContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
+        env.mock_all_auths();
         client.initialize(&admin);
 
         let payer = Address::generate(&env);
         let payee1 = Address::generate(&env);
         let payee2 = Address::generate(&env);
-
-        env.mock_all_auths();
 
         let id1 = client.mint_receipt(&payer, &payee1, &500, &Symbol::new(&env, "Coffee"));
         let id2 = client.mint_receipt(&payer, &payee2, &1500, &Symbol::new(&env, "Invoice"));
@@ -385,6 +406,170 @@ mod tests {
         assert_eq!(client.get_receipt_count(&payer), 2);
     }
 
+    /// End-to-end tip flow against a real (test) Stellar Asset Contract:
+    /// verifies the transfer executes and that the sender is the authorizer
+    /// of the `send_tip` invocation.
+    #[test]
+    fn test_send_tip_moves_funds_and_requires_from_auth() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        env.mock_all_auths();
+        client.initialize(&admin);
+
+        // Register a native-like SAC and fund the tip sender.
+        let sac = env.register_stellar_asset_contract_v2(admin.clone());
+        let sac_address = sac.address();
+        let token = token::Client::new(&env, &sac_address);
+        let sac_admin = token::StellarAssetClient::new(&env, &sac_address);
+
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let amount = 123_i128;
+        sac_admin.mint(&from, &10_000);
+
+        client.send_tip(&sac_address, &from, &to, &amount);
+
+        // Exactly one auth entry is recorded and it belongs to the sender
+        // at the `send_tip` root (the SAC transfer appears nested under it).
+        // NOTE: `env.auths()` only reflects the most recent top-level
+        // invocation, so this must run before any further client calls.
+        let auths = env.auths();
+        assert_eq!(auths.len(), 1);
+        let (authorizer, invocation) = &auths[0];
+        assert_eq!(authorizer, &from);
+        match &invocation.function {
+            AuthorizedFunction::Contract((contract_address, name, args)) => {
+                assert_eq!(contract_address, &client.address);
+                assert_eq!(name, &Symbol::new(&env, "send_tip"));
+                assert_eq!(args.len(), 4);
+                // (token, from, to, amount) — sender and amount must be
+                // covered by the authorization to prevent argument swapping.
+                assert_eq!(
+                    Address::try_from_val(&env, &args.get(1).unwrap()).unwrap(),
+                    from
+                );
+                assert_eq!(
+                    Address::try_from_val(&env, &args.get(2).unwrap()).unwrap(),
+                    to
+                );
+                assert_eq!(
+                    i128::try_from_val(&env, &args.get(3).unwrap()).unwrap(),
+                    amount
+                );
+            }
+            _ => panic!("expected contract function authorization"),
+        }
+
+        // The transfer actually happened.
+        assert_eq!(token.balance(&from), 10_000 - amount);
+        assert_eq!(token.balance(&to), amount);
+        assert_eq!(client.get_tip_total(&to), amount);
+        assert_eq!(client.get_tip_count(&to), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Tip amount must be positive")]
+    fn test_send_tip_rejects_zero_amount() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        env.mock_all_auths();
+        client.initialize(&admin);
+
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        client.send_tip(&Address::generate(&env), &from, &to, &0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Tip amount must be positive")]
+    fn test_send_tip_rejects_negative_amount() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        env.mock_all_auths();
+        client.initialize(&admin);
+
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        client.send_tip(&Address::generate(&env), &from, &to, &-5);
+    }
+
+    #[test]
+    fn test_mint_receipt_requires_from_auth() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        env.mock_all_auths();
+        client.initialize(&admin);
+
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+
+        client.mint_receipt(&from, &to, &1000, &Symbol::new(&env, "Rent"));
+
+        // Exactly one auth entry, owned by the payer, covering the full
+        // `mint_receipt` invocation arguments.
+        assert_eq!(
+            env.auths(),
+            [(
+                from.clone(),
+                AuthorizedInvocation {
+                    function: AuthorizedFunction::Contract((
+                        client.address.clone(),
+                        Symbol::new(&env, "mint_receipt"),
+                        (
+                            from.clone(),
+                            to.clone(),
+                            1000_i128,
+                            Symbol::new(&env, "Rent")
+                        )
+                            .into_val(&env)
+                    )),
+                    sub_invocations: [].into(),
+                }
+            )]
+        );
+    }
+
+    /// Regression test for the auth-ordering fix: a call that panics on
+    /// validation must not leave behind a satisfied authorization for the
+    /// payer (which would be usable as a probe inside a bigger transaction).
+    #[test]
+    fn test_failed_mint_does_not_consume_auth() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        env.mock_all_auths();
+        client.initialize(&admin);
+
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+
+        // Amount validation happens *before* require_auth, so this panics
+        // without registering any authorization for `from`.
+        let result = client.try_mint_receipt(&from, &to, &0, &Symbol::new(&env, "Bad"));
+        assert!(result.is_err());
+        assert!(env.auths().is_empty());
+        assert_eq!(client.get_receipt_count(&from), 0);
+
+        // A valid call afterwards still works.
+        let id = client.mint_receipt(&from, &to, &250, &Symbol::new(&env, "Good"));
+        assert_eq!(id, 0);
+        assert_eq!(client.get_receipt_count(&from), 1);
+    }
+
     #[test]
     fn test_tip_totals_start_at_zero() {
         let env = Env::default();
@@ -392,6 +577,7 @@ mod tests {
         let client = MicroPayContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
+        env.mock_all_auths();
         client.initialize(&admin);
 
         let recipient = Address::generate(&env);

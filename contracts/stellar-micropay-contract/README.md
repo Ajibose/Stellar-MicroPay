@@ -19,7 +19,7 @@ The contract is written in Rust and compiled to WebAssembly (WASM) for deploymen
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Add WASM target
-rustup target add wasm32-unknown-unknown
+rustup target add wasm32v1-none
 
 # Install Stellar CLI
 cargo install --locked stellar-cli
@@ -28,10 +28,11 @@ cargo install --locked stellar-cli
 ## Build
 
 ```bash
-cargo build --target wasm32-unknown-unknown --release
+stellar contract build
 ```
 
-Output: `target/wasm32-unknown-unknown/release/stellar_micropay_contract.wasm`
+Output: `target/wasm32v1-none/release/stellar_micropay_contract.wasm`
+(relative to the workspace root, not this directory)
 
 ## Test
 
@@ -50,7 +51,7 @@ stellar keys fund alice --network testnet
 
 # Deploy
 stellar contract deploy \
-  --wasm target/wasm32-unknown-unknown/release/stellar_micropay_contract.wasm \
+  --wasm target/wasm32v1-none/release/stellar_micropay_contract.wasm \
   --source alice \
   --network testnet
 ```
