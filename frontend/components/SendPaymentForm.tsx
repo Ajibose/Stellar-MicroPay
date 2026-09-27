@@ -124,6 +124,7 @@ export default function SendPaymentForm({
 }: SendPaymentFormProps) {
   const [selectedAsset, setSelectedAsset] = useState<AssetType>("XLM");
   const [networkFeeXlm, setNetworkFeeXlm] = useState(STELLAR_BASE_FEE_XLM);
+  const [feeStatus, setFeeStatus] = useState<"loading" | "ready" | "error">("loading");
   const [destination, setDestination] = useState("");
   const [amount, setAmount] = useState("");
   const [memo, setMemo] = useState("");
@@ -402,10 +403,12 @@ export default function SendPaymentForm({
         const feeStats = await fetchNetworkFeeStats();
         if (!cancelled) {
           setNetworkFeeXlm(feeStats.baseFeeXlm || STELLAR_BASE_FEE_XLM);
+          setFeeStatus("ready");
         }
       } catch {
         if (!cancelled) {
           setNetworkFeeXlm(STELLAR_BASE_FEE_XLM);
+          setFeeStatus("error");
         }
       }
     };
@@ -1025,6 +1028,12 @@ export default function SendPaymentForm({
               className={clsx("input-field", amount && !isValidAmt && "border-red-500/50")}
               disabled={status !== "idle"}
             />
+            <p className="mt-2 text-xs text-slate-400" role="status">
+              {feeStatus === "loading" && "Fetching current network fee…"}
+              {feeStatus === "error" && `Network fee unavailable; using ${STELLAR_BASE_FEE_XLM} XLM fallback.`}
+              {feeStatus === "ready" && estimatedTotalDeducted != null &&
+                `Estimated fee: ~${networkFeeXlm.toFixed(7)} XLM (${Math.round(networkFeeXlm * 10_000_000)} stroops); total ~${estimatedTotalDeducted.toFixed(7)} XLM.`}
+            </p>
           </div>
         )}
 
