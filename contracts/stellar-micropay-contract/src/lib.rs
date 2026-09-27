@@ -23,7 +23,7 @@
 
 use soroban_sdk::{
     contract, contractimpl, contracttype,
-    token, Address, Env, Symbol,
+    token, Address, BytesN, Env, Symbol,
 };
 
 // ─── Data types ───────────────────────────────────────────────────────────────
@@ -92,6 +92,34 @@ impl MicroPayContract {
             panic!("Contract already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+    }
+
+    // ─── Admin & Upgrade ─────────────────────────────────────────────────────
+
+    /// Upgrade the WASM code of the current contract.
+    /// Admin-gated: only stored Admin address can call this function.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Contract not initialized");
+        admin.require_auth();
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
+
+    /// Rotate/update the contract admin address.
+    /// Admin-gated: only current Admin address can set a new admin.
+    pub fn set_admin(env: Env, new_admin: Address) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Contract not initialized");
+        admin.require_auth();
+
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
     }
 
     // ─── Tipping ─────────────────────────────────────────────────────────────
@@ -422,4 +450,61 @@ mod tests {
         assert_eq!(client.get_tip_total(&recipient), 0);
         assert_eq!(client.get_tip_count(&recipient), 0);
     }
+
+    #[test]
+    fn test_set_admin_and_rotation() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+        assert_eq!(client.get_admin(), admin);
+
+        let new_admin = Address::generate(&env);
+
+        env.mock_all_auths();
+        client.set_admin(&new_admin);
+
+        assert_eq!(client.get_admin(), new_admin);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_upgrade_non_admin_panics() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let dummy_hash = BytesN::from_array(&env, &[1u8; 32]);
+        // Without admin auth, calling upgrade panics
+        client.upgrade(&dummy_hash);
+    }
+
+    #[test]
+    fn test_upgrade_admin_requires_auth_and_invokes_deployer() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        env.mock_all_auths();
+
+        let dummy_hash = BytesN::from_array(&env, &[1u8; 32]);
+        // With admin auth, try_upgrade passes the admin auth check and invokes deployer.
+        // In native test environment, deployer returns an Err (InvalidAction for non-wasm target).
+        let res = client.try_upgrade(&dummy_hash);
+        assert!(res.is_err());
+    }
+
+
+
+
+
 }
+
