@@ -26,6 +26,7 @@ import {
   submitTransaction,
   truncateMemoText,
 } from "@/lib/stellar";
+import { Federation } from "@stellar/stellar-sdk";
 import { signTransactionWithWallet } from "@/lib/wallet";
 import { formatXLM, shortenAddress } from "@/utils/format";
 import clsx from "clsx";
@@ -139,6 +140,18 @@ export default function SendPaymentForm({
   const [isScannerSupported, setIsScannerSupported] = useState(false);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [scannerError, setScannerError] = useState<string | null>(null);
+  
+  // Split payment mode
+  const [isSplitPaymentMode, setIsSplitPaymentMode] = useState(false);
+  const [splitRecipients, setSplitRecipients] = useState<Array<{ address: string; percentage: number }>>([
+    { address: "", percentage: 100 }
+  ]);
+  
+  // Federation address lookup
+  const [isResolvingFederation, setIsResolvingFederation] = useState(false);
+  const [federationResolvedAddress, setFederationResolvedAddress] = useState<string | null>(null);
+  const [federationError, setFederationError] = useState<string | null>(null);
+  const federationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -373,6 +386,97 @@ export default function SendPaymentForm({
       setIsResolvingUsername(false);
     }
   };
+
+  // Federation address lookup with debounce
+  useEffect(() => {
+    if (federationDebounceRef.current) {
+      clearTimeout(federationDebounceRef.current);
+    }
+
+    const isFederationAddress = destination.includes("*") && !isValidStellarAddress(destination);
+    
+    if (!isFederationAddress) {
+      setFederationResolvedAddress(null);
+      setFederationError(null);
+      return;
+    }
+
+    setIsResolvingFederation(true);
+    setFederationError(null);
+    setFederationResolvedAddress(null);
+
+    federationDebounceRef.current = setTimeout(async () => {
+      try {
+        const [name, domain] = destination.split("*");
+        if (!name || !domain) {
+          setFederationError("Invalid federation address format");
+          setIsResolvingFederation(false);
+          return;
+        }
+
+        const result = await Federation.resolve(domain, name);
+        if (result.account_id) {
+          setFederationResolvedAddress(result.account_id);
+        } else {
+          setFederationError("Federation address not found");
+        }
+      } catch (err) {
+        setFederationError("Federation address not found");
+      } finally {
+        setIsResolvingFederation(false);
+      }
+    }, 500);
+
+    return () => {
+      if (federationDebounceRef.current) {
+        clearTimeout(federationDebounceRef.current);
+      }
+    };
+  }, [destination]);
+
+  const handleUseFederationAddress = () => {
+    if (federationResolvedAddress) {
+      setDestination(federationResolvedAddress);
+      setFederationResolvedAddress(null);
+      setFederationError(null);
+    }
+  };
+
+  // Split payment handlers
+  const handleAddSplitRecipient = () => {
+    if (splitRecipients.length >= 10) return;
+    const currentTotal = splitRecipients.reduce((sum, r) => sum + r.percentage, 0);
+    const remainingPercentage = Math.max(0, 100 - currentTotal);
+    setSplitRecipients([...splitRecipients, { address: "", percentage: remainingPercentage }]);
+  };
+
+  const handleRemoveSplitRecipient = (index: number) => {
+    const newRecipients = splitRecipients.filter((_, i) => i !== index);
+    if (newRecipients.length === 0) {
+      setSplitRecipients([{ address: "", percentage: 100 }]);
+    } else {
+      // Redistribute percentages
+      const total = newRecipients.reduce((sum, r) => sum + r.percentage, 0);
+      if (total < 100) {
+        newRecipients[0].percentage += (100 - total);
+      }
+      setSplitRecipients(newRecipients);
+    }
+  };
+
+  const handleUpdateSplitRecipient = (index: number, field: "address" | "percentage", value: string | number) => {
+    const newRecipients = [...splitRecipients];
+    if (field === "percentage") {
+      const numValue = Number(value);
+      newRecipients[index].percentage = Math.max(0, Math.min(100, numValue));
+    } else {
+      newRecipients[index].address = value as string;
+    }
+    setSplitRecipients(newRecipients);
+  };
+
+  const totalSplitPercentage = splitRecipients.reduce((sum, r) => sum + r.percentage, 0);
+  const splitPaymentsValid = splitRecipients.every(r => r.address && isValidStellarAddress(r.address)) && totalSplitPercentage === 100;
 
   const handleSelectFavourite = (address: string) => {
     setDestination(address);
@@ -668,10 +772,40 @@ export default function SendPaymentForm({
               type="text"
               value={destination}
               onChange={(e) => setDestination(e.target.value)}
-              placeholder="G... or @username"
-              className={clsx("input-field font-mono text-sm", destination && !isValidDest && !isUsernameDestination && "border-red-500/50")}
+              placeholder="G... or @username or user*domain.com"
+              className={clsx("input-field font-mono text-sm", destination && !isValidDest && !isUsernameDestination && !destination.includes("*") && "border-red-500/50")}
               disabled={status !== "idle" || destinationReadOnly}
             />
+
+            {/* Federation address resolution */}
+            {isResolvingFederation && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-slate-400">
+                <div className="w-4 h-4 border-2 border-stellar-400 border-t-transparent rounded-full animate-spin" />
+                Resolving federation address...
+              </div>
+            )}
+
+            {federationResolvedAddress && (
+              <div className="mt-2 flex items-center gap-2">
+                <div className="flex-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-3 py-2">
+                  <p className="text-xs text-emerald-400 mb-1">Resolved address:</p>
+                  <p className="text-xs font-mono text-emerald-300">{shortenAddress(federationResolvedAddress, 12)}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleUseFederationAddress}
+                  className="btn-primary px-3 py-2 text-xs"
+                >
+                  Use
+                </button>
+              </div>
+            )}
+
+            {federationError && (
+              <div className="mt-2 text-xs text-red-400">
+                {federationError}
+              </div>
+            )}
 
             {isFavouritesDropdownOpen && favourites.length > 0 && (
               <div className="absolute left-0 right-0 z-50 mt-1 max-h-60 overflow-y-auto rounded-xl border border-white/10 bg-slate-900 p-1 shadow-2xl">
@@ -707,6 +841,92 @@ export default function SendPaymentForm({
               className={clsx("input-field", amount && !isValidAmt && "border-red-500/50")}
               disabled={status !== "idle"}
             />
+          </div>
+        )}
+
+        {/* Split Payment Mode Toggle */}
+        {!hideDestinationField && !hideAmountField && (
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setIsSplitPaymentMode(!isSplitPaymentMode)}
+              className={clsx(
+                "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
+                isSplitPaymentMode ? "bg-stellar-500" : "bg-slate-600"
+              )}
+            >
+              <span
+                className={clsx(
+                  "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+                  isSplitPaymentMode ? "translate-x-6" : "translate-x-1"
+                )}
+              />
+            </button>
+            <span className="text-sm text-slate-300">Split payment among multiple recipients</span>
+          </div>
+        )}
+
+        {/* Split Payment Recipients */}
+        {isSplitPaymentMode && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="label mb-0">Recipients ({splitRecipients.length}/10)</label>
+              <span className={clsx(
+                "text-xs font-medium",
+                totalSplitPercentage === 100 ? "text-emerald-400" : "text-amber-400"
+              )}>
+                {totalSplitPercentage}% allocated
+              </span>
+            </div>
+            {splitRecipients.map((recipient, index) => (
+              <div key={index} className="rounded-xl border border-white/10 bg-white/5 p-3 space-y-2">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={recipient.address}
+                    onChange={(e) => handleUpdateSplitRecipient(index, "address", e.target.value)}
+                    placeholder="G..."
+                    className="input-field font-mono text-sm flex-1"
+                    disabled={status !== "idle"}
+                  />
+                  <input
+                    type="number"
+                    value={recipient.percentage}
+                    onChange={(e) => handleUpdateSplitRecipient(index, "percentage", e.target.value)}
+                    min="0"
+                    max="100"
+                    className="input-field w-20 text-sm"
+                    disabled={status !== "idle"}
+                  />
+                  <span className="text-slate-400 text-sm self-center">%</span>
+                  {splitRecipients.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveSplitRecipient(index)}
+                      className="text-red-400 hover:text-red-300 px-2"
+                      disabled={status !== "idle"}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+            {splitRecipients.length < 10 && (
+              <button
+                type="button"
+                onClick={handleAddSplitRecipient}
+                disabled={status !== "idle"}
+                className="btn-secondary w-full text-sm"
+              >
+                + Add recipient
+              </button>
+            )}
+            {totalSplitPercentage !== 100 && (
+              <div className="text-xs text-amber-400">
+                Total percentage must equal 100% (currently {totalSplitPercentage}%)
+              </div>
+            )}
           </div>
         )}
 
