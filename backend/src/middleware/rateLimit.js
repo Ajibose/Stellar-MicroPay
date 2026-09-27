@@ -19,4 +19,27 @@ const strictLimiter = rateLimit({
   message: { error: "Too many requests to sensitive routes, please wait 1 minute." },
 });
 
-module.exports = { strictLimiter };
+function createAuthLimiter(max) {
+  return rateLimit({
+    windowMs: 1 * 60 * 1000,
+    max,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (req, res, next, options) => {
+      const resetTime = req.rateLimit && req.rateLimit.resetTime;
+      const retryAfter = resetTime
+        ? Math.max(1, Math.ceil((resetTime.getTime() - Date.now()) / 1000))
+        : Math.ceil(options.windowMs / 1000);
+
+      res.setHeader("Retry-After", String(retryAfter));
+      res.status(options.statusCode).json({
+        error: "Too many authentication requests, please try again later.",
+      });
+    },
+  });
+}
+
+const authChallengeLimiter = createAuthLimiter(10);
+const authVerifyLimiter = createAuthLimiter(5);
+
+module.exports = { strictLimiter, authChallengeLimiter, authVerifyLimiter };

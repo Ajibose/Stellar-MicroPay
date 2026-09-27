@@ -11,6 +11,7 @@ const express = require("express");
 const jwt     = require("jsonwebtoken");
 const { Utils, Keypair } = require("@stellar/stellar-sdk");
 const { JWT_SECRET } = require("../middleware/auth");
+const { authChallengeLimiter, authVerifyLimiter } = require("../middleware/rateLimit");
 
 const router = express.Router();
 
@@ -31,7 +32,7 @@ function getServerKeypair() {
 }
 
 // GET /api/auth?account=G... — issue a SEP-0010 challenge transaction
-router.get("/", (req, res) => {
+router.get("/", authChallengeLimiter, (req, res) => {
   const { account } = req.query;
   if (!account) {
     return res.status(400).json({ error: "Missing account query parameter" });
@@ -53,7 +54,7 @@ router.get("/", (req, res) => {
 });
 
 // POST /api/auth — verify signed challenge and issue JWT
-router.post("/", (req, res) => {
+router.post("/", authVerifyLimiter, (req, res) => {
   const { transaction } = req.body;
   if (!transaction) {
     return res.status(400).json({ error: "Missing transaction in request body" });
