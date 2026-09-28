@@ -45,4 +45,8 @@ function sanitizeUsername(req, res, next) {
   next();
 }
 
-module.exports = { sanitizePublicKey, sanitizeUsername };
+function validateBody(check) {
+  return (req, res, next) => { const errors = check(req.body) || []; if (errors.length) return res.status(422).json({ errors }); next(); };
+}
+
+module.exports = { sanitizePublicKey, sanitizeUsername, validateBody };
