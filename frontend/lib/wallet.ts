@@ -16,6 +16,7 @@ import {
   requestAccess,
   isAllowed,
 } from "@stellar/freighter-api";
+import { Transaction } from "@stellar/stellar-sdk";
 
 import { getNetworkPassphrase, getNetworkConfig } from "./stellar";
 
@@ -275,6 +276,7 @@ export function disconnectWallet(): void {
 
 let ledgerTransport: any = null;
 let ledgerApp: any = null;
+const LEDGER_STELLAR_PATH = "44'/148'/0'";
 
 /**
  * Check if Ledger hardware wallet is supported (WebUSB available).
@@ -303,7 +305,7 @@ export async function getLedgerPublicKey(): Promise<{ publicKey: string | null; 
     ledgerTransport = await TransportWebUSB.create();
     ledgerApp = new AppStellar(ledgerTransport);
     
-    const result = await ledgerApp.getPublicKey("", "44'", true);
+    const result = await ledgerApp.getPublicKey(LEDGER_STELLAR_PATH, true, true);
     const publicKey = result.publicKey;
     
     await ledgerTransport.close();
@@ -349,8 +351,10 @@ export async function signTransactionWithLedger(xdr: string): Promise<{ signedXD
     ledgerTransport = await TransportWebUSB.create();
     ledgerApp = new AppStellar(ledgerTransport);
     
-    const result = await ledgerApp.signTransaction("", xdr);
-    const signedXDR = result.signature;
+    const transaction = new Transaction(xdr, getNetworkPassphrase());
+    const result = await ledgerApp.signTransaction(LEDGER_STELLAR_PATH, transaction.signatureBase());
+    transaction.addSignature(transaction.source, result.signature.toString("base64"));
+    const signedXDR = transaction.toXDR();
     
     await ledgerTransport.close();
     ledgerTransport = null;

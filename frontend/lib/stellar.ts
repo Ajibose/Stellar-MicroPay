@@ -1107,7 +1107,7 @@ export async function buildSorobanTipTransaction({
   const contract = new Contract(CONTRACT_ID);
 
   // Derive the XLM Asset Contract ID
-  const xlmContractId = Asset.native().contractId(NETWORK_PASSPHRASE);
+  const xlmContractId = Asset.native().contractId(getNetworkPassphrase());
 
   const stroops = BigInt(Math.round(parseFloat(amount) * STELLAR_STROOPS_PER_XLM));
 

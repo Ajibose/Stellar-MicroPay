@@ -73,9 +73,10 @@ jobs:
         with:
           targets: wasm32v1-none
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --target wasm32v1-none
+      - name: Install Stellar CLI for Soroban builds
+        run: cargo install --locked stellar-cli --version 27.1.0
+      - run: stellar contract build
       - run: cargo test
-      - run: cargo build --target wasm32v1-none --release
       - uses: actions/upload-artifact@v4
         with:
           name: stellar-micropay-contract-wasm
