@@ -230,7 +230,7 @@ export const KNOWN_ASSETS = {
 
 /** Get known assets for the current network. */
 export function getKnownAssets() {
-  return KNOWN_ASSETS[NETWORK];
+  return KNOWN_ASSETS[getNetwork()];
 }
 
 /** Soroban RPC server URL. Defaults to testnet. */
@@ -453,7 +453,7 @@ export async function fundWithFriendbot(publicKey: string): Promise<void> {
  * Guarded to testnet only.
  */
 export async function getFriendBotFunding(publicKey: string): Promise<void> {
-  if (NETWORK !== "testnet") {
+  if (getNetwork() !== "testnet") {
     throw new Error("Friendbot is only available on Stellar testnet.");
   }
 
@@ -647,7 +647,7 @@ export async function buildChangeTrustTransaction({
 
   const builder = new TransactionBuilder(sourceAccount, {
     fee: STELLAR_BASE_FEE_STROOPS_STRING,
-    networkPassphrase: NETWORK_PASSPHRASE,
+    networkPassphrase: getNetworkPassphrase(),
   })
     .addOperation(
       Operation.changeTrust({
@@ -699,7 +699,7 @@ export async function buildPaymentTransaction({
 
   const builder = new TransactionBuilder(sourceAccount, {
     fee: STELLAR_BASE_FEE_STROOPS_STRING,
-    networkPassphrase: NETWORK_PASSPHRASE,
+    networkPassphrase: getNetworkPassphrase(),
   })
     .addOperation(
       Operation.payment({
@@ -736,7 +736,7 @@ export async function buildAccountMergeTransaction({
 
   const builder = new TransactionBuilder(sourceAccount, {
     fee: STELLAR_BASE_FEE_STROOPS_STRING,
-    networkPassphrase: NETWORK_PASSPHRASE,
+    networkPassphrase: getNetworkPassphrase(),
   })
     .addOperation(
       Operation.accountMerge({
@@ -764,13 +764,13 @@ export async function buildAccountMergeTransaction({
  *
  * @example
  * ```ts
- * const signedXDR = await signTransaction(tx.toXDR(), { networkPassphrase: NETWORK_PASSPHRASE });
+ * const signedXDR = await signTransaction(tx.toXDR(), { networkPassphrase: getNetworkPassphrase() });
  * const result = await submitTransaction(signedXDR);
  * console.log("Transaction hash:", result.hash);
  * ```
 */
 export async function submitTransaction(signedXDR: string) {
-  const transaction = TransactionBuilder.fromXDR(signedXDR, NETWORK_PASSPHRASE) as Transaction;
+  const transaction = TransactionBuilder.fromXDR(signedXDR, getNetworkPassphrase()) as Transaction;
   try {
     const result = await server.submitTransaction(transaction);
     return result;
@@ -801,11 +801,11 @@ export async function submitTransaction(signedXDR: string) {
 export async function collectSignatures(unsignedXDR: string, signedXDRs: string[]): Promise<string> {
   try {
     // Parse the unsigned transaction
-    const transaction = new Transaction(unsignedXDR, NETWORK_PASSPHRASE);
+    const transaction = new Transaction(unsignedXDR, getNetworkPassphrase());
 
     // Collect signatures from each signed XDR
     for (const signedXDR of signedXDRs) {
-      const signedTx = new Transaction(signedXDR, NETWORK_PASSPHRASE);
+      const signedTx = new Transaction(signedXDR, getNetworkPassphrase());
       // Add each signature from the signed transaction
       for (const sig of signedTx.signatures) {
         // Check if signature already exists to avoid duplicates
@@ -1073,7 +1073,7 @@ export function isValidStellarAddress(address: string): boolean {
  * ```
 */
 export function explorerUrl(hash: string): string {
-  const net = NETWORK === "mainnet" ? "public" : "testnet";
+  const net = getNetwork() === "mainnet" ? "public" : "testnet";
   return `https://stellar.expert/explorer/${net}/tx/${hash}`;
 }
 
@@ -1114,7 +1114,7 @@ export async function buildSorobanTipTransaction({
   // Prepare the `send_tip` invocation
   const tx = new TransactionBuilder(sourceAccount, {
     fee: STELLAR_BASE_FEE_STROOPS_STRING,
-    networkPassphrase: NETWORK_PASSPHRASE,
+    networkPassphrase: getNetworkPassphrase(),
   })
     .addOperation(
       contract.call(
@@ -1156,7 +1156,7 @@ export async function getContractTipTotal(recipient: string): Promise<string> {
     // but simulation is more robust for contract getters.
     const tx = new TransactionBuilder(
       new Account(recipient, "0"),
-      { fee: STELLAR_BASE_FEE_STROOPS_STRING, networkPassphrase: NETWORK_PASSPHRASE }
+      { fee: STELLAR_BASE_FEE_STROOPS_STRING, networkPassphrase: getNetworkPassphrase() }
     )
       .addOperation(
         contract.call("get_tip_total", nativeToScVal(recipient, { type: "address" }))
@@ -1208,7 +1208,7 @@ export async function buildReceiptMintTransaction({
 
   const tx = new TransactionBuilder(sourceAccount, {
     fee: "100",
-    networkPassphrase: NETWORK_PASSPHRASE,
+    networkPassphrase: getNetworkPassphrase(),
   })
     .addOperation(
       contract.call(
@@ -1240,7 +1240,7 @@ export async function getReceiptCount(payer: string): Promise<number> {
     const contract = new Contract(CONTRACT_ID);
     const tx = new TransactionBuilder(
       new Account(payer, "0"),
-      { fee: "100", networkPassphrase: NETWORK_PASSPHRASE }
+      { fee: "100", networkPassphrase: getNetworkPassphrase() }
     )
       .addOperation(
         contract.call("get_receipt_count", nativeToScVal(payer, { type: "address" }))
@@ -1587,7 +1587,7 @@ export async function buildCancelOfferTransaction({
   const sourceAccount = await server.loadAccount(fromPublicKey);
   return new TransactionBuilder(sourceAccount, {
     fee: STELLAR_BASE_FEE_STROOPS_STRING,
-    networkPassphrase: NETWORK_PASSPHRASE,
+    networkPassphrase: getNetworkPassphrase(),
   })
     .addOperation(
       Operation.manageSellOffer({
@@ -1621,7 +1621,7 @@ export async function buildSellOfferTransaction({
   const sourceAccount = await server.loadAccount(fromPublicKey);
   return new TransactionBuilder(sourceAccount, {
     fee: STELLAR_BASE_FEE_STROOPS_STRING,
-    networkPassphrase: NETWORK_PASSPHRASE,
+    networkPassphrase: getNetworkPassphrase(),
   })
     .addOperation(
       Operation.manageSellOffer({
@@ -1654,7 +1654,7 @@ export async function buildBuyOfferTransaction({
   const sourceAccount = await server.loadAccount(fromPublicKey);
   return new TransactionBuilder(sourceAccount, {
     fee: STELLAR_BASE_FEE_STROOPS_STRING,
-    networkPassphrase: NETWORK_PASSPHRASE,
+    networkPassphrase: getNetworkPassphrase(),
   })
     .addOperation(
       Operation.manageBuyOffer({
@@ -1691,7 +1691,7 @@ export async function buildPathPaymentTransaction({
   const sourceAccount = await server.loadAccount(fromPublicKey);
   return new TransactionBuilder(sourceAccount, {
     fee: STELLAR_BASE_FEE_STROOPS_STRING,
-    networkPassphrase: NETWORK_PASSPHRASE,
+    networkPassphrase: getNetworkPassphrase(),
   })
     .addOperation(
       Operation.pathPaymentStrictReceive({
