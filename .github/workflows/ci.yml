@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Reject whitespace errors and unresolved conflicts
         run: |
           git diff --check HEAD^
@@ -67,13 +69,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32v1-none
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --target wasm32v1-none
+      - name: Install Stellar CLI
+        run: |
+          curl -L https://s3.amazonaws.com/stellar-cli/install.sh | sh -s -- -v 25.2.0
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - run: stellar contract build
       - run: cargo test
-      - run: cargo build --target wasm32v1-none --release
       - uses: actions/upload-artifact@v4
         with:
           name: stellar-micropay-contract-wasm

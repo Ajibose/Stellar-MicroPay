@@ -277,16 +277,16 @@ let ledgerTransport: any = null;
 let ledgerApp: any = null;
 
 /**
- * Check if Ledger hardware wallet is supported (WebUSB available).
+ * Check if Ledger hardware wallet is supported (WebHID available).
  */
 export const isLedgerSupported = async (): Promise<boolean> => {
   if (typeof window === "undefined") return false;
-  if (!navigator || !(navigator as any).usb) return false;
+  if (!navigator || !(navigator as any).hid) return false;
   
   try {
     // Dynamic import to avoid SSR issues
-    const TransportWebUSB = (await import("@ledgerhq/hw-transport-webusb")).default;
-    return TransportWebUSB.isSupported();
+    const TransportWebHID = (await import("@ledgerhq/hw-transport-webhid")).default;
+    return TransportWebHID.isSupported();
   } catch {
     return false;
   }
@@ -297,10 +297,10 @@ export const isLedgerSupported = async (): Promise<boolean> => {
  */
 export async function getLedgerPublicKey(): Promise<{ publicKey: string | null; error: string | null }> {
   try {
-    const TransportWebUSB = (await import("@ledgerhq/hw-transport-webusb")).default;
+    const TransportWebHID = (await import("@ledgerhq/hw-transport-webhid")).default;
     const AppStellar = (await import("@ledgerhq/hw-app-stellar")).default;
     
-    ledgerTransport = await TransportWebUSB.create();
+    ledgerTransport = await TransportWebHID.create();
     ledgerApp = new AppStellar(ledgerTransport);
     
     const result = await ledgerApp.getPublicKey("", "44'", true);
@@ -343,10 +343,10 @@ export async function getLedgerPublicKey(): Promise<{ publicKey: string | null; 
  */
 export async function signTransactionWithLedger(xdr: string): Promise<{ signedXDR: string | null; error: string | null }> {
   try {
-    const TransportWebUSB = (await import("@ledgerhq/hw-transport-webusb")).default;
+    const TransportWebHID = (await import("@ledgerhq/hw-transport-webhid")).default;
     const AppStellar = (await import("@ledgerhq/hw-app-stellar")).default;
     
-    ledgerTransport = await TransportWebUSB.create();
+    ledgerTransport = await TransportWebHID.create();
     ledgerApp = new AppStellar(ledgerTransport);
     
     const result = await ledgerApp.signTransaction("", xdr);
