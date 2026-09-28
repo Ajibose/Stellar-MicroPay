@@ -285,5 +285,120 @@ describe("Analytics Service", () => {
       await analyticsService.getSummary(testPublicKey);
       expect(stellarService.getPayments).toHaveBeenCalledTimes(2);
     });
+
+    it("should return the number of invalidated entries", async () => {
+      stellarService.getPayments.mockResolvedValue(mockPayments);
+
+      await analyticsService.getSummary(testPublicKey);
+      await analyticsService.getTopRecipients(testPublicKey);
+      await analyticsService.getActivityByDay(testPublicKey);
+
+      // All three entries cached for this key
+      expect(analyticsService.clearCache(testPublicKey)).toBe(3);
+
+      // Nothing left to clear
+      expect(analyticsService.clearCache(testPublicKey)).toBe(0);
+    });
+  });
+
+  describe("LRU eviction", () => {
+    it("should evict the least recently used entries beyond the max size", async () => {
+      // Unique keys per account so each account occupies its own cache entries
+      const accountCount = 600; // above the default max of 500
+      const accounts = Array.from({ length: accountCount }, (_, i) =>
+        `GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJLVXKJ46ZGFWTTNQNXNHTJX${String(i).padStart(2, "0")}`
+      );
+
+      stellarService.getPayments.mockResolvedValue([]);
+
+      // Populate cache entries (summary only → one entry per account)
+      for (const publicKey of accounts) {
+        await analyticsService.getSummary(publicKey);
+      }
+
+      // Re-touch the very first account so it becomes most recently used
+      await analyticsService.getSummary(accounts[0]);
+
+      // Add one more entry to push eviction beyond the 500 cap
+      await analyticsService.getSummary("GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJLVXKJ46ZGFWTTNQNXNHTJXZZ");
+
+      // The LRU entry (accounts[1], untouched) must have been evicted.
+      // accounts[0] was re-touched, so it must still be cached.
+      const callsAfterPopulate = stellarService.getPayments.mock.calls.length;
+      await analyticsService.getSummary(accounts[0]);
+      // No additional fetch: served from cache despite being the oldest-inserted key.
+      expect(stellarService.getPayments).toHaveBeenCalledTimes(callsAfterPopulate);
+
+      // An evicted account must be fetched again.
+      await analyticsService.getSummary(accounts[1]);
+      expect(stellarService.getPayments).toHaveBeenCalledTimes(callsAfterPopulate + 1);
+    });
+  });
+
+  describe("admin cache invalidation endpoint", () => {
+    const request = require("supertest");
+    const jwt = require("jsonwebtoken");
+    const { JWT_SECRET } = require("../src/middleware/auth");
+    let app;
+
+    beforeAll(() => {
+      app = require("../src/server");
+    });
+
+    // Route-level sanitization requires exactly 56 chars starting with "G".
+    const endpointKey = "GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJLVXKJ46ZGFWTTNQNXNHTJXW2";
+
+    function authHeaderFor(publicKey) {
+      const token = jwt.sign({ publicKey }, JWT_SECRET, { expiresIn: "1h" });
+      return `Bearer ${token}`;
+    }
+
+    it("returns 401 without a JWT", async () => {
+      const res = await request(app).delete(`/api/analytics/cache/${testPublicKey}`);
+      expect(res.status).toBe(401);
+    });
+
+    it("returns 403 for a non-admin authenticated account", async () => {
+      process.env.ADMIN_PUBLIC_KEYS = "GBUQWP3BOUZX34ULNQG23RQ6F4BWFIYGJ2DN5ZKQYTROZXNUAAOXWS7";
+      const res = await request(app)
+        .delete(`/api/analytics/cache/${endpointKey}`)
+        .set("Authorization", authHeaderFor(endpointKey));
+      expect(res.status).toBe(403);
+    });
+
+    it("force-invalidates the cache for an admin account", async () => {
+      process.env.ADMIN_PUBLIC_KEYS = endpointKey;
+      stellarService.getPayments.mockResolvedValue(mockPayments);
+
+      // Warm the cache
+      await analyticsService.getSummary(endpointKey);
+      expect(stellarService.getPayments).toHaveBeenCalledTimes(1);
+
+      // Served from cache
+      await analyticsService.getSummary(endpointKey);
+      expect(stellarService.getPayments).toHaveBeenCalledTimes(1);
+
+      // Admin invalidates the cache via the endpoint
+      const res = await request(app)
+        .delete(`/api/analytics/cache/${endpointKey}`)
+        .set("Authorization", authHeaderFor(endpointKey));
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        success: true,
+        data: { publicKey: endpointKey, invalidated: 1 },
+      });
+
+      // Next call must hit the service again
+      await analyticsService.getSummary(endpointKey);
+      expect(stellarService.getPayments).toHaveBeenCalledTimes(2);
+    });
+
+    it("returns 403 when no admin accounts are configured", async () => {
+      delete process.env.ADMIN_PUBLIC_KEYS;
+      const res = await request(app)
+        .delete(`/api/analytics/cache/${endpointKey}`)
+        .set("Authorization", authHeaderFor(endpointKey));
+      expect(res.status).toBe(403);
+    });
   });
 });

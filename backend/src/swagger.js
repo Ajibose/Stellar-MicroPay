@@ -535,6 +535,47 @@ const options = {
           },
         },
       },
+      "/api/analytics/cache/{publicKey}": {
+        delete: {
+          tags: ["Analytics"],
+          summary: "Force-invalidate cached analytics for an account (admin only)",
+          description:
+            "Requires a valid SEP-0010 JWT. The JWT public key must be listed in ADMIN_PUBLIC_KEYS. Removes all cached analytics entries for the target account so the next request fetches fresh data from Horizon.",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "publicKey",
+              in: "path",
+              required: true,
+              schema: { type: "string", pattern: "^G[A-Z0-9]{55}$" },
+            },
+          ],
+          responses: {
+            200: {
+              description: "Cache entries invalidated",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      success: { type: "boolean" },
+                      data: {
+                        type: "object",
+                        properties: {
+                          publicKey: { type: "string" },
+                          invalidated: { type: "integer" },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: "Missing or invalid JWT" },
+            403: { description: "Caller is not an admin account" },
+          },
+        },
+      },
       "/api/tips/received/{creatorPublicKey}": {
         get: {
           tags: ["Tips"],
@@ -705,6 +746,15 @@ const options = {
     },
   },
   apis: [],
+};
+
+options.definition.components.securitySchemes = {
+  bearerAuth: {
+    type: "http",
+    scheme: "bearer",
+    bearerFormat: "JWT",
+    description: "SEP-0010 JWT obtained from POST /api/auth",
+  },
 };
 
 module.exports = swaggerJsdoc(options);

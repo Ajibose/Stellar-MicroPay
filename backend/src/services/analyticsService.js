@@ -2,7 +2,7 @@
  * src/services/analyticsService.js
  * Business logic for transaction volume analytics.
  * Fetches payment data from Horizon and computes aggregated insights.
- * Includes in-memory caching with 5-minute TTL.
+ * Includes in-memory caching with 5-minute TTL and LRU eviction.
  */
 
 "use strict";
@@ -12,7 +12,33 @@ const stellarService = require("./stellarService");
 // ─── Cache Configuration ──────────────────────────────────────────────────────
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes in milliseconds
+const CACHE_MAX_SIZE = parseInt(process.env.ANALYTICS_CACHE_MAX_SIZE, 10) || 500;
+
+/**
+ * LRU cache backed by a Map. JavaScript Maps preserve insertion order, so
+ * re-inserting an entry (delete + set) moves it to the end of the iteration
+ * order and the oldest entry can be evicted from the front. This bounds
+ * memory usage and evicts least-recently-used accounts first.
+ */
 const cache = new Map();
+
+/**
+ * Insert or refresh a cache entry, marking it as most-recently-used and
+ * evicting the least-recently-used entry when the cache is over capacity.
+ * @param {string} key
+ * @param {*} data
+ */
+function setCacheEntry(key, data) {
+  // Delete first so re-inserting an existing key refreshes its position.
+  cache.delete(key);
+  cache.set(key, { data, timestamp: Date.now() });
+
+  // Evict least-recently-used entries while over capacity.
+  while (cache.size > CACHE_MAX_SIZE) {
+    const oldestKey = cache.keys().next().value;
+    cache.delete(oldestKey);
+  }
+}
 
 /**
  * Cache wrapper function.
@@ -24,6 +50,8 @@ async function withCache(key, fn) {
 
   // Return cached data if still fresh
   if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    // Refresh recency so frequently-used entries are not evicted.
+    setCacheEntry(key, cached.data);
     return cached.data;
   }
 
@@ -31,7 +59,7 @@ async function withCache(key, fn) {
   const data = await fn();
 
   // Update cache
-  cache.set(key, { data, timestamp: Date.now() });
+  setCacheEntry(key, data);
 
   return data;
 }
@@ -167,11 +195,23 @@ async function getActivityByDay(publicKey) {
 /**
  * Clear cache for a specific public key (optional helper).
  * Useful for manual cache invalidation if needed.
+ * @param {string} publicKey
+ * @returns {number} Number of cache entries invalidated for this key.
  */
 function clearCache(publicKey) {
-  cache.delete(`summary:${publicKey}`);
-  cache.delete(`top-recipients:${publicKey}`);
-  cache.delete(`activity:${publicKey}`);
+  const prefixes = [
+    `summary:${publicKey}`,
+    `top-recipients:${publicKey}`,
+    `activity:${publicKey}`,
+  ];
+
+  let invalidated = 0;
+  for (const key of prefixes) {
+    if (cache.delete(key)) {
+      invalidated++;
+    }
+  }
+  return invalidated;
 }
 
 module.exports = {

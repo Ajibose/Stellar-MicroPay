@@ -8,8 +8,37 @@
 const express = require("express");
 const router = express.Router();
 const { strictLimiter } = require("../middleware/rateLimit");
+const { verifyJWT } = require("../middleware/auth");
 const { sanitizePublicKey } = require("../middleware/sanitization");
 const analyticsController = require("../controllers/analyticsController");
+
+// Only accounts listed in ADMIN_PUBLIC_KEYS may invalidate the cache.
+/**
+ * Returns the configured admin public keys.
+ * Read per-request (not cached at module load) so runtime config changes apply.
+ * @returns {string[]}
+ */
+function getAdminPublicKeys() {
+  return (process.env.ADMIN_PUBLIC_KEYS || "")
+    .split(",")
+    .map((k) => k.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Restricts access to admin-configured public keys.
+ * Must run after verifyJWT so req.user is populated.
+ */
+function requireAdmin(req, res, next) {
+  const adminPublicKeys = getAdminPublicKeys();
+  if (adminPublicKeys.length === 0) {
+    return res.status(403).json({ error: "Forbidden: no admin accounts configured" });
+  }
+  if (!req.user || !adminPublicKeys.includes(req.user.publicKey)) {
+    return res.status(403).json({ error: "Forbidden: admin access required" });
+  }
+  next();
+}
 
 /**
  * GET /api/analytics/:publicKey/summary
@@ -42,6 +71,18 @@ router.get(
   strictLimiter,
   sanitizePublicKey,
   analyticsController.getActivityByDay
+);
+
+/**
+ * DELETE /api/analytics/cache/:publicKey
+ * JWT-protected admin endpoint: force-invalidates cached analytics.
+ */
+router.delete(
+  "/cache/:publicKey",
+  verifyJWT,
+  requireAdmin,
+  sanitizePublicKey,
+  analyticsController.invalidateCache
 );
 
 module.exports = router;

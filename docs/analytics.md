@@ -9,10 +9,14 @@ Three new analytics endpoints have been added to the Stellar MicroPay backend to
 ✅ **GET /api/analytics/:publicKey/activity** — Transaction counts by day of week  
 
 All endpoints include:
-- **Caching**: 5-minute TTL using in-memory Map to minimize Horizon API calls
+- **Caching**: 5-minute TTL using an in-memory Map with LRU eviction (max 500 entries) to minimize Horizon API calls
 - **Error Handling**: Graceful handling of Horizon errors and invalid public keys
 - **Rate Limiting**: Protected by `strictLimiter` middleware (same as other API routes)
 - **Input Sanitization**: Public key validation via `sanitizePublicKey` middleware
+
+An admin endpoint is also available:
+
+✅ **DELETE /api/analytics/cache/:publicKey** — Force-invalidate cached analytics for an account (JWT + admin only)
 
 ## Files Added/Modified
 
@@ -198,10 +202,43 @@ All endpoints use **5-minute TTL in-memory caching** to minimize Horizon API cal
 - **Subsequent requests** (within 5 min) → Returns cached data instantly
 - **After 5 minutes** → Cache expires, fetches fresh data from Horizon
 
+The cache is bounded with **LRU eviction**:
+
+- **Max size**: 500 entries (configurable via `ANALYTICS_CACHE_MAX_SIZE` env var)
+- When the cache exceeds the max size, the **least recently used** entries are evicted first
+- Every cache hit refreshes an entry's recency, so hot accounts stay cached while inactive ones are evicted — memory usage stays bounded
+
+### Admin Cache Invalidation
+
+**Route**: `DELETE /api/analytics/cache/:publicKey`
+
+Force-invalidates all cached analytics entries for an account so the next request fetches fresh data from Horizon. Useful after an account receives new transactions that must be reflected immediately.
+
+**Authentication**: Requires a valid SEP-0010 JWT (`Bearer` token from `POST /api/auth`). The JWT's `publicKey` must be listed in the `ADMIN_PUBLIC_KEYS` env var (comma-separated). If `ADMIN_PUBLIC_KEYS` is unset, all requests are rejected with `403`.
+
+```bash
+curl -X DELETE \
+  -H "Authorization: Bearer $JWT" \
+  http://localhost:4000/api/analytics/cache/YOUR_PUBLIC_KEY
+```
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "publicKey": "GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJLVXKJ46ZGFWTTNQNXNHTJXW",
+    "invalidated": 3
+  }
+}
+```
+
 This provides:
 - ✅ Reduced API load on Stellar Horizon
 - ✅ Faster response times for repeated queries
-- ✅ No external database required (simple in-memory Map)
+- ✅ No external database required (simple in-memory Map with bounded memory)
+- ✅ Bounded memory via LRU eviction (no unbounded growth)
+- ✅ On-demand fresh data via the admin invalidation endpoint
 
 ## Performance Characteristics
 
