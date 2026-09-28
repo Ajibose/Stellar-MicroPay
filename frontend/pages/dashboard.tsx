@@ -54,6 +54,7 @@ import {
   waitForAccountFunding,
   ACCOUNT_NOT_FOUND_ERROR,
   streamPayments,
+  shortenAddress,
   getRecentPaymentsForStats,
   getRecentPaymentsForSparkline,
   PaymentRecord,
@@ -684,7 +685,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
       async (payment) => {
         if (payment.type === 'received') {
           const formattedAmount = formatAsset(payment.amount, payment.asset);
-          showToast(`Received ${formattedAmount}`);
+          showToast(`Received ${formattedAmount} from ${shortenAddress(payment.from)}`);
 
           if (notificationEnabled && Notification.permission === 'granted') {
             if (document.visibilityState === 'hidden') {
