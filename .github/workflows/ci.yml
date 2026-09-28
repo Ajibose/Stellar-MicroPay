@@ -39,6 +39,12 @@ jobs:
       - name: TypeScript type check (tsc --noEmit)
         run: npm run type-check
         working-directory: frontend
+        with:
+          fetch-depth: 0
+      - name: Reject whitespace errors and unresolved conflicts
+        run: |
+          git diff --check HEAD^
+          ! git grep -n -E '^(<<<<<<<|=======|>>>>>>>)'
 
   test-frontend:
     name: Test (frontend)
