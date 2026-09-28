@@ -14,6 +14,11 @@ This guide provides step-by-step instructions for deploying the Stellar-MicroPay
 
 2. **Stellar Account**: Have a funded Stellar account for deployment
 3. **Git**: For version control and PR creation
+4. **JWT Secret**: Generate a strong random secret for JWT token signing
+   ```bash
+   openssl rand -base64 48
+   ```
+   Add this value to your `.env` file as `JWT_SECRET=<generated_value>`
 
 ## Backend Configuration
 
