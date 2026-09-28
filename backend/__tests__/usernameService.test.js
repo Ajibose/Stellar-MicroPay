@@ -14,8 +14,8 @@ const os = require("os");
 const path = require("path");
 
 const G1 = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
-const G2 = "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBWFH2";
-const G3 = "GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCFHH2";
+const G2 = "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+const G3 = "GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
 
 // Each test gets an isolated store file via USERNAMES_DATA_FILE.
 let dataDir;
@@ -63,6 +63,9 @@ describe("usernameService — persistent storage (Issue #1056)", () => {
     const first = freshService();
     first.registerUsername("alice", G1);
     first.registerUsername("bob42", G2);
+
+    // Writes are debounced; flush so the simulated restart can read them.
+    first.flushSync();
 
     // Simulated restart: fresh module load re-creates the store from disk.
     const second = freshService();
@@ -119,14 +122,18 @@ describe("usernameService — persistent storage (Issue #1056)", () => {
   it("keeps lookups O(1) via the in-memory index (no disk read on resolve)", () => {
     const service = freshService();
     for (let i = 0; i < 500; i++) {
-      service.registerUsername(`user${i}`, G1);
+      // Distinct valid-format keys: the public-key uniqueness scan must not
+      // reject repeated registrations under the stress load.
+      service.registerUsername(`user${i}`, `G${String(i).padStart(55, "0")}`);
     }
     // Map-backed: repeated lookups are constant-time object lookups. We
     // assert correctness here; the structural guarantee lives in
     // src/storage/usernameStore.js (Map over the file contents).
     const start = process.hrtime.bigint();
     for (let i = 0; i < 500; i++) {
-      expect(service.resolveUsername(`user${i}`).publicKey).toBe(G1);
+      expect(service.resolveUsername(`user${i}`).publicKey).toBe(
+        `G${String(i).padStart(55, "0")}`
+      );
     }
     const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
     expect(elapsedMs).toBeLessThan(1000); // generous CI bound for 1000 lookups

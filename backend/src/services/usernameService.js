@@ -161,4 +161,6 @@ module.exports = {
   removeUsername,
   validateUsername,
   validatePublicKey,
+  /** Flushes any pending debounced store write (used on graceful shutdown/tests). */
+  flushSync: () => store.flushSync(),
 };
