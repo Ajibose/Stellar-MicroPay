@@ -20,6 +20,9 @@ export default function SettingsPage() {
   const [customUrl, setCustomUrl] = useState("");
   const [showMainnetWarning, setShowMainnetWarning] = useState(false);
   const [pendingNetwork, setPendingNetwork] = useState<"testnet" | "mainnet" | "custom" | null>(null);
+  const [fiatCurrency, setFiatCurrency] = useState<string>("USD");
+  useEffect(() => { setFiatCurrency(localStorage.getItem("stellar-micropay:fiat") || "USD"); }, []);
+  const changeFiatCurrency = (code: string) => { setFiatCurrency(code); localStorage.setItem("stellar-micropay:fiat", code); };
 
   // Username registration state
   const [username, setUsername] = useState("");
@@ -178,6 +181,19 @@ export default function SettingsPage() {
               <p className="text-slate-600 dark:text-slate-400">
                 Configure your Stellar network preferences
               </p>
+            </div>
+
+            <div className="bg-white dark:bg-cosmos-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">
+                Display Currency
+              </h2>
+              <div className="grid grid-cols-4 gap-3">
+                {["USD", "EUR", "BRL", "GBP"].map((code) => (
+                  <button key={code} onClick={() => changeFiatCurrency(code)} className={`px-4 py-3 rounded-lg border text-sm font-medium transition-all ${fiatCurrency === code ? "border-stellar-500 bg-stellar-500/10 text-stellar-500" : "border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300"}`}>
+                    {code}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="bg-white dark:bg-cosmos-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
