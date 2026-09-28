@@ -1,11 +1,13 @@
 /**
  * components/Navbar.tsx
  * Top navigation bar with theme toggle, network status, and wallet controls.
+ * On mobile (< 768px) the nav links collapse into a hamburger menu that
+ * toggles a slide-down drawer (Issue #1040).
  */
 
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import clsx from "clsx";
 import {
   shortenAddress,
@@ -35,6 +37,7 @@ export default function Navbar() {
   const { theme, toggleTheme } = useTheme();
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
   const [feeLevel, setFeeLevel] = useState<FeeLevel | null>(null);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const config = getNetworkConfig();
   const isMainnet = config.network === "mainnet";
   const networkLabel =
@@ -45,6 +48,10 @@ export default function Navbar() {
       : isMainnet
         ? "border-emerald-400/35 bg-emerald-400/10 text-emerald-300"
         : "border-amber-400/35 bg-amber-400/10 text-amber-300";
+
+  const hamburgerButtonRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const firstDrawerLinkRef = useRef<HTMLAnchorElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,6 +85,61 @@ export default function Navbar() {
 
     return () => window.clearTimeout(timeoutId);
   }, [showDisconnectConfirm]);
+
+  // Reset the drawer whenever the route changes so it never stays open
+  // across a navigation.
+  useEffect(() => {
+    setIsMobileMenuOpen(false);
+  }, [router.pathname]);
+
+  // Drawer behavior: close on Escape, trap Tab focus inside while open, and
+  // lock body scroll so the underlying page cannot scroll behind the drawer.
+  useEffect(() => {
+    if (!isMobileMenuOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setIsMobileMenuOpen(false);
+        hamburgerButtonRef.current?.focus();
+        return;
+      }
+
+      if (event.key !== "Tab") return;
+
+      const focusable = drawerRef.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled])'
+      );
+      if (!focusable || focusable.length === 0) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const activeElement = document.activeElement as HTMLElement | null;
+
+      if (event.shiftKey) {
+        if (activeElement === first || !drawerRef.current?.contains(activeElement)) {
+          event.preventDefault();
+          last.focus();
+        }
+      } else if (activeElement === last || !drawerRef.current?.contains(activeElement)) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    // Move focus into the drawer when it opens.
+    firstDrawerLinkRef.current?.focus();
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isMobileMenuOpen]);
 
   const handleConnectClick = async () => {
     const { publicKey: nextPublicKey, error: walletError } =
@@ -209,8 +271,54 @@ export default function Navbar() {
               Connect Wallet
             </button>
           )}
+
+          <button
+            ref={hamburgerButtonRef}
+            type="button"
+            onClick={() => setIsMobileMenuOpen((open) => !open)}
+            aria-expanded={isMobileMenuOpen}
+            aria-controls="mobile-nav-drawer"
+            aria-label={
+              isMobileMenuOpen ? "Close navigation menu" : "Open navigation menu"
+            }
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300/30 bg-white/90 text-slate-700 shadow-sm transition-all duration-200 hover:bg-slate-100 md:hidden dark:border-slate-700/50 dark:bg-cosmos-800/80 dark:text-slate-100 dark:hover:bg-cosmos-700/90"
+          >
+            {isMobileMenuOpen ? <CloseIcon /> : <HamburgerIcon />}
+          </button>
         </div>
       </div>
+
+      {isMobileMenuOpen && (
+        <div
+          id="mobile-nav-drawer"
+          ref={drawerRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Site navigation"
+          className="border-t border-[rgba(14,165,233,0.12)] bg-white/95 backdrop-blur-xl animate-slide-down md:hidden dark:bg-cosmos-900/95"
+        >
+          <ul className="mx-auto flex max-w-6xl flex-col px-4 py-2 sm:px-6">
+            {navLinks.map((link, index) => (
+              <li key={link.href}>
+                <Link
+                  href={link.href}
+                  ref={index === 0 ? firstDrawerLinkRef : undefined}
+                  onClick={() => setIsMobileMenuOpen(false)}
+                  aria-current={router.pathname === link.href ? "page" : undefined}
+                  className={clsx(
+                    "block rounded-lg px-4 py-3 text-sm font-medium transition-all duration-150",
+                    router.pathname === link.href
+                      ? "bg-stellar-500/15 text-stellar-300"
+                      : "text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-slate-200"
+                  )}
+                >
+                  {link.label}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </nav>
   );
 }
@@ -260,6 +368,38 @@ function SunIcon() {
         strokeLinejoin="round"
         d="M12 3v1m0 16v1m8.66-9h-1M4.34 12h-1m15.07-6.07-.71.71M6.34 17.66l-.71.71m12.02 0-.71-.71M6.34 6.34l-.71-.71M12 7a5 5 0 100 10A5 5 0 0012 7z"
       />
+    </svg>
+  );
+}
+
+function HamburgerIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      className="h-5 w-5"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+      aria-hidden="true"
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      className="h-5 w-5"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+      aria-hidden="true"
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
     </svg>
   );
 }
