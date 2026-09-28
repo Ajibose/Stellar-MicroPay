@@ -75,6 +75,7 @@ type FavouriteEntry = {
 };
 
 const ESTIMATED_NETWORK_FEE = `${STELLAR_BASE_FEE_XLM} XLM`;
+const XLM_USD_RATE = 0.11;
 const FAVOURITES_STORAGE_KEY = "stellar-micropay:favourites";
 
 interface BarcodeDetectorResult {
@@ -996,6 +997,7 @@ export default function SendPaymentForm({
         amount={amountNum}
         memo={memo}
         estimatedFee={ESTIMATED_NETWORK_FEE}
+        usdValue={amountNum * XLM_USD_RATE}
         isTipOnChain={isTipOnChain}
         onCancel={() => setIsConfirmOpen(false)}
         onConfirm={() => { setIsConfirmOpen(false); executeSend(); }}
@@ -1102,12 +1104,13 @@ interface SendConfirmationModalProps {
   amount: number;
   memo: string;
   estimatedFee: string;
+  usdValue: number;
   isTipOnChain: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }
 
-function SendConfirmationModal({ isOpen, destination, amount, memo, estimatedFee, onCancel, onConfirm }: SendConfirmationModalProps) {
+function SendConfirmationModal({ isOpen, destination, amount, memo, estimatedFee, usdValue, onCancel, onConfirm }: SendConfirmationModalProps) {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
@@ -1122,6 +1125,7 @@ function SendConfirmationModal({ isOpen, destination, amount, memo, estimatedFee
             <div>
               <p className="text-xs text-slate-500 uppercase font-bold">Amount</p>
               <p className="text-lg font-bold text-white">{amount} XLM</p>
+              <p className="text-xs text-slate-400">≈ ${usdValue.toFixed(2)} USD</p>
             </div>
             <div>
               <p className="text-xs text-slate-500 uppercase font-bold">Fee</p>
@@ -1136,8 +1140,8 @@ function SendConfirmationModal({ isOpen, destination, amount, memo, estimatedFee
           )}
         </div>
         <div className="mt-8 flex gap-3">
-          <button onClick={onCancel} className="flex-1 rounded-xl border border-white/10 py-3 text-sm font-semibold text-white hover:bg-white/5 transition-all">Cancel</button>
-          <button onClick={onConfirm} className="flex-1 btn-primary py-3">Confirm & Send</button>
+          <button onClick={onCancel} className="flex-1 rounded-xl border border-white/10 py-3 text-sm font-semibold text-white hover:bg-white/5 transition-all">Back</button>
+          <button onClick={onConfirm} className="flex-1 btn-primary py-3">Confirm &amp; Sign</button>
         </div>
       </div>
     </div>
