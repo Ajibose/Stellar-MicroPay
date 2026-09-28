@@ -293,6 +293,52 @@ async function getPayments(publicKey, { limit = 20, cursor } = {}) {
   return payments;
 }
 
+/**
+ * Get N most-recently used distinct MEMO_TEXT memos for an account.
+ *
+ * @param {string} publicKey - Stellar public key (G...)
+ * @param {object} [options]
+ * @param {number} [options.limit=10] - Maximum number of distinct memos to return
+ * @returns {Promise<string[]>} List of distinct memo strings
+ */
+async function getMemoHistory(publicKey, { limit = 10 } = {}) {
+  validatePublicKey(publicKey);
+
+  const query = server.payments().forAccount(publicKey).limit(200).order("desc");
+  const result = await withTimeoutAndRetry(() => query.call());
+
+  const distinctMemos = [];
+  const seen = new Set();
+
+  for (const op of result.records) {
+    if (!PAYMENT_TYPES.has(op.type)) continue;
+
+    let memoText;
+    try {
+      const tx = typeof op.transaction === "function" ? await op.transaction() : op.transaction;
+      if (tx && (tx.memo_type === "text" || tx.memo_type === "MEMO_TEXT") && tx.memo) {
+        memoText = tx.memo;
+      }
+    } catch {
+      // memo is optional
+    }
+
+    if (!memoText && (op.memo_type === "text" || op.memo_type === "MEMO_TEXT") && op.memo) {
+      memoText = op.memo;
+    }
+
+    if (memoText && !seen.has(memoText)) {
+      seen.add(memoText);
+      distinctMemos.push(memoText);
+      if (distinctMemos.length >= limit) {
+        break;
+      }
+    }
+  }
+
+  return distinctMemos;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function validatePublicKey(publicKey) {
@@ -307,7 +353,9 @@ module.exports = {
   getAccount,
   getXLMBalance,
   getPayments,
+  getMemoHistory,
   validatePublicKey,
   clearStreaksCache,
   getAccountStreaks,
 };
+

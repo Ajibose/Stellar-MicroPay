@@ -9,6 +9,7 @@ const express = require("express");
 const router = express.Router();
 const { strictLimiter } = require("../middleware/rateLimit");
 const { sanitizePublicKey, sanitizeUsername } = require("../middleware/sanitization");
+const { verifyJWT } = require("../middleware/auth");
 const accountController = require("../controllers/accountController");
 
 /**
@@ -17,12 +18,6 @@ const accountController = require("../controllers/accountController");
  * Must be registered before /:publicKey or Express matches it as a key.
  */
 router.get("/resolve/:username", strictLimiter, sanitizeUsername, accountController.resolveUsername);
-
-/**
- * GET /api/accounts/:publicKey
- * Fetch account info and balances from Horizon.
- */
-router.get("/:publicKey", strictLimiter, sanitizePublicKey, accountController.getAccount);
 
 /**
  * GET /api/accounts/:publicKey/balance
@@ -37,9 +32,22 @@ router.get("/:publicKey/balance", strictLimiter, sanitizePublicKey, accountContr
 router.get("/:publicKey/streaks", strictLimiter, sanitizePublicKey, accountController.getStreaks);
 
 /**
+ * GET /api/accounts/:publicKey/memo-history
+ * Fetch N most-recently used distinct memo texts for an account. JWT-protected.
+ */
+router.get("/:publicKey/memo-history", strictLimiter, verifyJWT, sanitizePublicKey, accountController.getMemoHistory);
+
+/**
+ * GET /api/accounts/:publicKey
+ * Fetch account info and balances from Horizon.
+ */
+router.get("/:publicKey", strictLimiter, sanitizePublicKey, accountController.getAccount);
+
+/**
  * POST /api/accounts/register
  * Register a new username with a public key.
  */
 router.post("/register", strictLimiter, accountController.registerUsername);
 
 module.exports = router;
+
