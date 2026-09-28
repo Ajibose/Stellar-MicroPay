@@ -27,6 +27,7 @@ const priceAlertsRoutes = require("./routes/priceAlerts");
 const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./swagger");
 const { startTurretsServer } = require("./turretsServer");
+const { sanitizeRequest } = require("./middleware/sanitization");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -59,8 +60,14 @@ app.use((err, req, res, next) => {
   if (err instanceof SyntaxError && err.status === 400 && "body" in err) {
     return res.status(400).json({ error: "Invalid JSON body" });
   }
-  next();
+  // Forward other body-parser errors (e.g. 413 payload too large) so they are
+  // not silently swallowed and the request does not reach the route handlers.
+  next(err);
 });
+
+// Global input sanitization — trims strings and rejects null bytes on every
+// route. Must be mounted before the route handlers below.
+app.use(sanitizeRequest);
 
 // CORS
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:3000")
