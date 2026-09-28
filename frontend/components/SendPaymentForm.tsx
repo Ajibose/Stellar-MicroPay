@@ -75,6 +75,7 @@ type FavouriteEntry = {
 };
 
 const ESTIMATED_NETWORK_FEE = `${STELLAR_BASE_FEE_XLM} XLM`;
+const XLM_USD_RATE = 0.11;
 const FAVOURITES_STORAGE_KEY = "stellar-micropay:favourites";
 
 interface BarcodeDetectorResult {
@@ -251,6 +252,24 @@ export default function SendPaymentForm({
   });
 
   const [isFavouritesDropdownOpen, setIsFavouritesDropdownOpen] = useState(false);
+  const [activeSuggestion, setActiveSuggestion] = useState(0);
+  const contactSuggestions = hideDestinationField
+    ? []
+    : favourites
+        .filter(
+          (f) =>
+            destination.length > 0 &&
+            (f.name.toLowerCase().includes(destination.toLowerCase()) ||
+              f.address.startsWith(destination))
+        )
+        .slice(0, 5);
+  const handleDestinationKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!contactSuggestions.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setActiveSuggestion((i) => (i + 1) % contactSuggestions.length); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActiveSuggestion((i) => (i - 1 + contactSuggestions.length) % contactSuggestions.length); }
+    else if (e.key === "Enter" && contactSuggestions[activeSuggestion]) { e.preventDefault(); setDestination(contactSuggestions[activeSuggestion].address); setActiveSuggestion(0); }
+    else if (e.key === "Escape") { setActiveSuggestion(0); setDestination(""); }
+  };
   const [isManageModalOpen, setIsManageModalOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -345,7 +364,7 @@ export default function SendPaymentForm({
   const balance = selectedAsset === "XLM" ? xlmBal : usdcBal;
   const maxSend =
     selectedAsset === "XLM"
-      ? Math.max(0, xlmBal - STELLAR_MINIMUM_ACCOUNT_BALANCE_XLM)
+      ? Math.max(0, xlmBal - STELLAR_MINIMUM_ACCOUNT_BALANCE_XLM - networkFeeXlm)
       : usdcBal;
 
   const amountNum = parseFloat(amount);
@@ -772,39 +791,31 @@ export default function SendPaymentForm({
               type="text"
               value={destination}
               onChange={(e) => setDestination(e.target.value)}
-              placeholder="G... or @username or user*domain.com"
-              className={clsx("input-field font-mono text-sm", destination && !isValidDest && !isUsernameDestination && !destination.includes("*") && "border-red-500/50")}
+              onKeyDown={handleDestinationKeyDown}
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={contactSuggestions.length > 0}
+              aria-controls="destination-suggestions"
+              placeholder="G... or @username"
+              className={clsx("input-field font-mono text-sm", destination && !isValidDest && !isUsernameDestination && "border-red-500/50")}
               disabled={status !== "idle" || destinationReadOnly}
             />
 
-            {/* Federation address resolution */}
-            {isResolvingFederation && (
-              <div className="mt-2 flex items-center gap-2 text-xs text-slate-400">
-                <div className="w-4 h-4 border-2 border-stellar-400 border-t-transparent rounded-full animate-spin" />
-                Resolving federation address...
-              </div>
-            )}
-
-            {federationResolvedAddress && (
-              <div className="mt-2 flex items-center gap-2">
-                <div className="flex-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-3 py-2">
-                  <p className="text-xs text-emerald-400 mb-1">Resolved address:</p>
-                  <p className="text-xs font-mono text-emerald-300">{shortenAddress(federationResolvedAddress, 12)}</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleUseFederationAddress}
-                  className="btn-primary px-3 py-2 text-xs"
-                >
-                  Use
-                </button>
-              </div>
-            )}
-
-            {federationError && (
-              <div className="mt-2 text-xs text-red-400">
-                {federationError}
-              </div>
+            {contactSuggestions.length > 0 && (
+              <ul id="destination-suggestions" role="listbox" aria-label="Contact suggestions" className="absolute left-0 right-0 z-50 mt-1 max-h-60 overflow-y-auto rounded-xl border border-white/10 bg-slate-900 p-1 shadow-2xl">
+                {contactSuggestions.map((item, index) => (
+                  <li key={item.address} role="option" aria-selected={index === activeSuggestion}>
+                    <button
+                      type="button"
+                      onClick={() => { setDestination(item.address); setActiveSuggestion(0); }}
+                      className={clsx("flex w-full flex-col items-start rounded-lg px-3 py-2 text-left", index === activeSuggestion ? "bg-white/5" : "hover:bg-white/5")}
+                    >
+                      <span className="text-sm font-medium text-slate-200">{item.name}</span>
+                      <span className="text-xs text-slate-500">{shortenAddress(item.address, 8)}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
             )}
 
             {isFavouritesDropdownOpen && favourites.length > 0 && (
@@ -829,8 +840,8 @@ export default function SendPaymentForm({
           <div>
             <div className="mb-2 flex items-center justify-between">
               <label className="label mb-0">Amount ({selectedAsset})</label>
-              <button type="button" onClick={setMaxAmount} className="text-xs text-stellar-400 hover:text-stellar-300" disabled={status !== "idle"}>
-                Max: {formatXLM(maxSend)}
+              <button type="button" onClick={setMaxAmount} className="text-xs text-stellar-400 hover:text-stellar-300" disabled={status !== "idle"} title="Send Max: balance - 1 XLM base reserve - subentry reserves - current network fee">
+                Send Max: {formatXLM(maxSend)}
               </button>
             </div>
             <input
@@ -986,6 +997,7 @@ export default function SendPaymentForm({
         amount={amountNum}
         memo={memo}
         estimatedFee={ESTIMATED_NETWORK_FEE}
+        usdValue={amountNum * XLM_USD_RATE}
         isTipOnChain={isTipOnChain}
         onCancel={() => setIsConfirmOpen(false)}
         onConfirm={() => { setIsConfirmOpen(false); executeSend(); }}
@@ -1092,12 +1104,13 @@ interface SendConfirmationModalProps {
   amount: number;
   memo: string;
   estimatedFee: string;
+  usdValue: number;
   isTipOnChain: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }
 
-function SendConfirmationModal({ isOpen, destination, amount, memo, estimatedFee, onCancel, onConfirm }: SendConfirmationModalProps) {
+function SendConfirmationModal({ isOpen, destination, amount, memo, estimatedFee, usdValue, onCancel, onConfirm }: SendConfirmationModalProps) {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
@@ -1112,6 +1125,7 @@ function SendConfirmationModal({ isOpen, destination, amount, memo, estimatedFee
             <div>
               <p className="text-xs text-slate-500 uppercase font-bold">Amount</p>
               <p className="text-lg font-bold text-white">{amount} XLM</p>
+              <p className="text-xs text-slate-400">≈ ${usdValue.toFixed(2)} USD</p>
             </div>
             <div>
               <p className="text-xs text-slate-500 uppercase font-bold">Fee</p>
@@ -1126,8 +1140,8 @@ function SendConfirmationModal({ isOpen, destination, amount, memo, estimatedFee
           )}
         </div>
         <div className="mt-8 flex gap-3">
-          <button onClick={onCancel} className="flex-1 rounded-xl border border-white/10 py-3 text-sm font-semibold text-white hover:bg-white/5 transition-all">Cancel</button>
-          <button onClick={onConfirm} className="flex-1 btn-primary py-3">Confirm & Send</button>
+          <button onClick={onCancel} className="flex-1 rounded-xl border border-white/10 py-3 text-sm font-semibold text-white hover:bg-white/5 transition-all">Back</button>
+          <button onClick={onConfirm} className="flex-1 btn-primary py-3">Confirm &amp; Sign</button>
         </div>
       </div>
     </div>

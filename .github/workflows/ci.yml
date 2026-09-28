@@ -78,7 +78,7 @@ jobs:
       - name: Install Stellar CLI
         run: |
           curl -L https://s3.amazonaws.com/stellar-cli/install.sh | sh -s -- -v 25.2.0
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          echo "$HOME/.local/bin:$HOME/.cargo/bin:$HOME/.stellar/bin" >> $GITHUB_PATH
       - run: stellar contract build
       - run: cargo test
       - uses: actions/upload-artifact@v4
