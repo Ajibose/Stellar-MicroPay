@@ -20,7 +20,7 @@ jobs:
           fetch-depth: 0
       - name: Reject whitespace errors and unresolved conflicts
         run: |
-          git diff --check HEAD^
+          git diff --check $(git merge-base origin/main HEAD)
           ! git grep -n -E '^(<<<<<<<|=======|>>>>>>>)'
 
   frontend:
