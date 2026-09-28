@@ -72,7 +72,24 @@ pub enum DataKey {
     ReceiptCount(Address),
     /// Receipt record indexed by (payer, index)
     ReceiptRecord(Address, u32),
+    /// Operator fee, in basis points, charged on every tip
+    FeeBps,
 }
+
+/// Event payload emitted when a tip is sent, capturing the gross tip
+/// amount and any operator fee that was deducted from it.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TipEventData {
+    pub amount: i128,
+    pub fee_amount: i128,
+}
+
+/// Maximum operator fee the admin may configure, in basis points (5%).
+const MAX_FEE_BPS: u32 = 500;
+
+/// Basis-point denominator: 1 bps = 1 / 10_000.
+const FEE_BPS_DENOMINATOR: i128 = 10_000;
 
 // ─── Contract ─────────────────────────────────────────────────────────────────
 
@@ -104,7 +121,9 @@ impl MicroPayContract {
     ///   - to:            The recipient
     ///   - amount:        Amount in the token's smallest unit (stroops for XLM)
     ///
-    /// This records the tip on-chain for analytics and emits an event.
+    /// If an operator fee is configured (see `set_fee_bps`), `amount * fee_bps / 10000`
+    /// is transferred to the admin and the remainder to `to`. This records the tip
+    /// on-chain for analytics and emits an event.
     pub fn send_tip(
         env: Env,
         token_address: Address,
@@ -120,9 +139,27 @@ impl MicroPayContract {
             panic!("Tip amount must be positive");
         }
 
+        let fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeBps)
+            .unwrap_or(0);
+        let fee_amount: i128 = (amount * fee_bps as i128) / FEE_BPS_DENOMINATOR;
+        let net_amount: i128 = amount - fee_amount;
+
         // Transfer tokens via the Stellar token interface (SAC)
         let token = token::Client::new(&env, &token_address);
-        token.transfer(&from, &to, &amount);
+
+        if fee_amount > 0 {
+            let admin: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::Admin)
+                .expect("Contract not initialized");
+            token.transfer(&from, &admin, &fee_amount);
+        }
+
+        token.transfer(&from, &to, &net_amount);
 
         // Update on-chain tip totals for the recipient
         let current_total: i128 = env
@@ -156,11 +193,44 @@ impl MicroPayContract {
             .instance()
             .set(&DataKey::TipRecord(to.clone(), current_count), &record);
 
-        // Emit an event for indexers
+        // Emit an event for indexers, including the fee collected (if any)
         env.events().publish(
             (Symbol::new(&env, "tip"), from, to.clone()),
-            amount,
+            TipEventData { amount, fee_amount },
         );
+    }
+
+    // ─── Fees ────────────────────────────────────────────────────────────────
+
+    /// Set the operator fee charged on every tip, in basis points
+    /// (1 bps = 0.01%). Capped at 500 bps (5%). Only callable by the
+    /// current admin. A `fee_bps` of 0 disables the fee (the default).
+    pub fn set_fee_bps(env: Env, admin: Address, fee_bps: u32) {
+        admin.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Contract not initialized");
+
+        if admin != stored_admin {
+            panic!("Only the admin can set the fee");
+        }
+
+        if fee_bps > MAX_FEE_BPS {
+            panic!("Fee exceeds maximum allowed (500 bps)");
+        }
+
+        env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+    }
+
+    /// Get the currently configured operator fee, in basis points.
+    pub fn get_fee_bps(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::FeeBps)
+            .unwrap_or(0)
     }
 
     // ─── Getters ─────────────────────────────────────────────────────────────
@@ -397,5 +467,140 @@ mod tests {
         let recipient = Address::generate(&env);
         assert_eq!(client.get_tip_total(&recipient), 0);
         assert_eq!(client.get_tip_count(&recipient), 0);
+    }
+
+    // ─── Fee collection ─────────────────────────────────────────────────────
+
+    fn create_token_contract<'a>(
+        env: &Env,
+        admin: &Address,
+    ) -> (token::Client<'a>, token::StellarAssetClient<'a>) {
+        let sac = env.register_stellar_asset_contract_v2(admin.clone());
+        let address = sac.address();
+        (
+            token::Client::new(env, &address),
+            token::StellarAssetClient::new(env, &address),
+        )
+    }
+
+    #[test]
+    fn test_default_fee_is_zero() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        assert_eq!(client.get_fee_bps(), 0);
+    }
+
+    #[test]
+    fn test_zero_fee_sends_full_amount_to_recipient() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let token_admin = Address::generate(&env);
+        let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        token_admin_client.mint(&sender, &10_000);
+
+        // fee_bps defaults to 0 — no explicit set_fee_bps call needed.
+        client.send_tip(&token.address, &sender, &recipient, &1_000);
+
+        assert_eq!(token.balance(&recipient), 1_000);
+        assert_eq!(token.balance(&admin), 0);
+        assert_eq!(token.balance(&sender), 9_000);
+    }
+
+    #[test]
+    fn test_half_percent_fee_is_deducted_and_sent_to_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let token_admin = Address::generate(&env);
+        let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        token_admin_client.mint(&sender, &1_000_000);
+
+        client.set_fee_bps(&admin, &50); // 0.5%
+        assert_eq!(client.get_fee_bps(), 50);
+
+        client.send_tip(&token.address, &sender, &recipient, &10_000);
+
+        // 0.5% of 10_000 = 50
+        assert_eq!(token.balance(&admin), 50);
+        assert_eq!(token.balance(&recipient), 9_950);
+        assert_eq!(token.balance(&sender), 990_000);
+    }
+
+    #[test]
+    fn test_max_fee_of_five_percent_is_deducted_and_sent_to_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let token_admin = Address::generate(&env);
+        let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        token_admin_client.mint(&sender, &1_000_000);
+
+        client.set_fee_bps(&admin, &500); // 5% (max allowed)
+
+        client.send_tip(&token.address, &sender, &recipient, &10_000);
+
+        // 5% of 10_000 = 500
+        assert_eq!(token.balance(&admin), 500);
+        assert_eq!(token.balance(&recipient), 9_500);
+        assert_eq!(token.balance(&sender), 990_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "Fee exceeds maximum allowed")]
+    fn test_fee_above_max_is_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        client.set_fee_bps(&admin, &501);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the admin can set the fee")]
+    fn test_non_admin_cannot_set_fee() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let impostor = Address::generate(&env);
+        client.set_fee_bps(&impostor, &100);
     }
 }
