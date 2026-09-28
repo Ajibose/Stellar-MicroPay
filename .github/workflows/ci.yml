@@ -17,7 +17,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          # `git diff --check HEAD^` needs the parent commit; the default
+          # depth-1 checkout doesn't include it.
+          fetch-depth: 2
       - name: Reject whitespace errors and unresolved conflicts
         run: |
           git diff --check HEAD^
@@ -73,9 +75,11 @@ jobs:
         with:
           targets: wasm32v1-none
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --target wasm32v1-none
+        # soroban-sdk 28 refuses plain `cargo build` for wasm targets and
+        # requires `stellar contract build` from stellar-cli v25.2.0+.
+      - uses: stellar/stellar-cli@v27.0.0
       - run: cargo test
-      - run: cargo build --target wasm32v1-none --release
+      - run: stellar contract build
       - uses: actions/upload-artifact@v4
         with:
           name: stellar-micropay-contract-wasm
