@@ -77,7 +77,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install Stellar CLI
         run: |
-          curl -L https://s3.amazonaws.com/stellar-cli/install.sh | sh -s -- -v 25.2.0
+          curl -L https://s3.amazonaws.com/stellar-cli/install.sh | bash -s -- -v 25.2.0
           echo "$HOME/.local/bin:$HOME/.cargo/bin:$HOME/.stellar/bin" >> $GITHUB_PATH
       - run: stellar contract build
       - run: cargo test
