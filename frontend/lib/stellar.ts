@@ -75,6 +75,10 @@ export function getNetworkPassphrase(): string {
   return config.network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
 }
 
+const config = getNetworkConfig();
+export const NETWORK = config.network === "custom" ? "testnet" : config.network; // Default to testnet for custom
+export const NETWORK_PASSPHRASE = getNetworkPassphrase();
+
 // Helper functions for backward compatibility
 export function getNetwork(): "testnet" | "mainnet" {
   const config = getNetworkConfig();
@@ -85,43 +89,6 @@ export function getHorizonUrl(): string {
   const config = getNetworkConfig();
   return config.horizonUrl;
 }
-
-// Deprecated: These constants evaluate at module load time and can cause SSR crashes.
-// Use getNetwork(), getHorizonUrl(), and getNetworkPassphrase() functions instead.
-// These are kept only for backwards compatibility and will be lazily initialized.
-let _legacyNetworkCache: "testnet" | "mainnet" | undefined;
-let _legacyHorizonUrlCache: string | undefined;
-let _legacyNetworkPassphraseCache: string | undefined;
-
-Object.defineProperty(exports as any, "NETWORK", {
-  get: function() {
-    if (_legacyNetworkCache === undefined) {
-      _legacyNetworkCache = getNetwork();
-    }
-    return _legacyNetworkCache;
-  },
-  enumerable: true
-});
-
-Object.defineProperty(exports as any, "HORIZON_URL", {
-  get: function() {
-    if (_legacyHorizonUrlCache === undefined) {
-      _legacyHorizonUrlCache = getHorizonUrl();
-    }
-    return _legacyHorizonUrlCache;
-  },
-  enumerable: true
-});
-
-Object.defineProperty(exports as any, "NETWORK_PASSPHRASE", {
-  get: function() {
-    if (_legacyNetworkPassphraseCache === undefined) {
-      _legacyNetworkPassphraseCache = getNetworkPassphrase();
-    }
-    return _legacyNetworkPassphraseCache;
-  },
-  enumerable: true
-});
 
 /** Pre-configured Horizon server instance for the active network. */
 let _server: Horizon.Server | null = null;
