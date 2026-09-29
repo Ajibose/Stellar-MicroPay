@@ -278,6 +278,27 @@ function StarIcon({ className }: { className?: string }) {
   );
 }
 
+function SparkleIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <path
+        d="M12 3L13.55 8.45L19 10L13.55 11.55L12 17L10.45 11.55L5 10L10.45 8.45L12 3Z"
+        fill="currentColor"
+      />
+      <path
+        d="M19 15L19.65 17.35L22 18L19.65 18.65L19 21L18.35 18.65L16 18L18.35 17.35L19 15Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
 function MoonIcon() {
   return (
     <svg
