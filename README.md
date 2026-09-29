@@ -50,6 +50,7 @@ pub struct Stream {
     pub deposited: i128,          // Total amount deposited (in stroops)
     pub claimed: i128,            // Total amount claimed (in stroops)
     pub start_ledger: u32,        // Ledger number when stream started
+    pub token: Address,           // Token escrowed at open time
 }
 ```
 
@@ -81,30 +82,70 @@ pub struct Stream {
 #### `get_claimable(stream_id) -> i128`
 - Calculates claimable amount without claiming
 
+#### `get_stream_history(stream_id) -> Vec<StreamEvent>`
+- Returns the full append-only event log for a stream
+- Each entry records the `event_type` (`claim` / `topup` / `close`), the
+  `amount`, and the `ledger` it happened on
+
+#### `get_stream_count() -> u32`
+- Returns the number of streams ever opened
+
+## Administration
+
+#### `set_max_rate(admin, max_rate)`
+- Sets an admin-configurable cap on `rate_per_ledger` for new streams
+- `open_stream` rejects any rate above the cap with `ContractError::RateTooHigh`
+- A cap of `0` (the default) disables the cap entirely
+- Lowering the cap does not affect streams that already exist
+
+#### `get_max_rate() -> i128`
+- Returns the current cap (`0` means uncapped)
+
+#### `freeze(admin)` / `unfreeze(admin)`
+- `freeze` sets a `Frozen` flag that blocks every state-changing entry point
+  with `ContractError::Frozen`
+- `unfreeze` clears it
+- Read-only getters (`get_stream`, `get_claimable`, `get_stream_history`,
+  `is_frozen`, …) keep working while frozen, so monitoring and incident
+  response are not blinded by a freeze
+
+#### `is_frozen() -> bool`
+- Whether the contract is currently frozen
+
 ## Security Features
 
 - **Authorization**: Only recipients can claim, only payers can close/top-up
-- **Rate Validation**: Rates must be positive
+- **Rate Validation**: Rates must be positive and within the admin cap
 - **Deposit Validation**: Deposits must be positive
-- **Overflow Protection**: Uses checked arithmetic operations
+- **Overflow Protection**: Saturating arithmetic; accrual is capped at the
+  funded window so `total_streamed <= deposited` holds structurally
+- **Emergency Pause**: Admin can freeze all state changes without a redeploy
 - **Access Control**: Proper authentication checks for all operations
 
 ## Mathematical Calculations
 
 ### Claimable Amount Calculation
 ```
-elapsed_ledgers = current_ledger - start_ledger
-total_streamed = rate_per_ledger * elapsed_ledgers
-claimable = total_streamed - claimed
+elapsed_ledgers = current_ledger - start_ledger          # saturating
+funded_ledgers = deposited / rate_per_ledger             # 0 if rate > deposited
+elapsed_ledgers = min(elapsed_ledgers, funded_ledgers)    # cap at the funded window
+total_streamed = rate_per_ledger * elapsed_ledgers       # bounded by deposited
+claimable = max(total_streamed - claimed, 0)             # saturating subtract
 actual_claim = min(claimable, deposited - claimed)
 ```
 
+Capping `elapsed_ledgers` at `funded_ledgers` before the multiply is what makes
+the arithmetic total: the product is bounded by `deposited`, so it can neither
+overflow `i128` nor exceed the escrow, for any combination of inputs.
+
 ### Refund Calculation
 ```
-elapsed_ledgers = current_ledger - start_ledger
-total_streamed = rate_per_ledger * elapsed_ledgers
-refundable = deposited - max(total_streamed, claimed)
+refundable = deposited - claimed
 ```
+
+Claims and refunds split the deposit exactly: `claimed + refundable == deposited`
+for any claim schedule, which `test_close_stream_after_claims` and
+`fuzz_repeated_claims_never_exceed_deposit` both assert.
 
 ## Usage Examples
 
@@ -158,6 +199,22 @@ The contract includes comprehensive tests covering:
 - Close and refund calculations
 - Authorization and validation
 - Error conditions
+- Rate cap at, below, and above the configured maximum
+- Stream event log contents and ordering
+- Frozen and unfrozen behavior across every entry point
+
+Run everything with `cargo test`, or just the property tests with:
+
+```bash
+cargo test fuzz -- --nocapture
+```
+
+The property tests replay saved counterexamples from
+`contracts/stellar-micropay-contract/proptest-regressions/lib.txt` before
+generating new cases, so a bug found once stays covered.
+
+The wasm build is not exercised by `cargo test`; it requires stellar-cli
+v25.2.0+ (`stellar contract build`). CI runs the same check.
 
 ## Installation and Deployment
 
@@ -174,17 +231,23 @@ docker pull ghcr.io/emmy123222/stellar-micropay-frontend:latest
 
 1. Install Rust and Soroban SDK
 2. Clone this repository
-3. Build the contract: `cargo build --release --target wasm32-unknown-unknown`
+3. Build the contract: `stellar contract build` (soroban-sdk 28 requires
+   stellar-cli v25.2.0+ for the wasm build)
 4. Deploy to Stellar testnet/mainnet
 5. Initialize contract with required parameters
 
 ## Acceptance Criteria Met
 
-✅ **cargo test passes for all streaming tests**
+✅ **`cargo test` passes for all streaming tests** (36 tests)
 ✅ **Claim amount calculated correctly at any ledger offset**
 ✅ **Top-up increases the stream duration**
-✅ **Close refunds the correct unclaimed amount**
+✅ **Close refunds the correct unclaimed amount** — `claimed + refund == deposited`
 ✅ **Only the recipient can claim, only the payer can close**
+✅ **Admin-configurable rate cap** — `set_max_rate`, `0` disables it
+✅ **No arithmetic panic for arbitrary inputs** — proptest over 1000 random
+   `(rate, elapsed, deposit, claimed)` tuples
+✅ **Full claim/top-up history** — `get_stream_history` returns the event log
+✅ **Emergency pause** — `freeze` / `unfreeze`, read-only getters stay available
 
 ## Technical Details
 
