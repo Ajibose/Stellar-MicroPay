@@ -4,11 +4,11 @@
  * Allows users to open, view, claim, and close streaming payments.
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useWallet } from "@/lib/useWallet";
 import { signTransactionWithWallet } from "@/lib/wallet";
 import { formatXLM } from "@/utils/format";
-import { buildPaymentTransaction, submitTransaction, STELLAR_MINIMUM_ACCOUNT_BALANCE_XLM } from "@/lib/stellar";
+import { buildPaymentTransaction, getXLMBalance, submitTransaction, STELLAR_MINIMUM_ACCOUNT_BALANCE_XLM } from "@/lib/stellar";
 
 const STROOPS_PER_XLM = 10_000_000;
 
@@ -30,7 +30,8 @@ interface NewStreamForm {
 }
 
 export default function StreamsPage() {
-  const { publicKey, xlmBalance } = useWallet();
+  const { publicKey } = useWallet();
+  const [xlmBalance, setXlmBalance] = useState("0");
   const [activeTab, setActiveTab] = useState<"open" | "my-streams" | "received">("open");
   const [myStreams, setMyStreams] = useState<Stream[]>([]);
   const [receivedStreams, setReceivedStreams] = useState<Stream[]>([]);
@@ -44,14 +45,7 @@ export default function StreamsPage() {
     deposit: "",
   });
 
-  // Load streams on mount
-  useEffect(() => {
-    if (publicKey) {
-      loadStreams();
-    }
-  }, [publicKey]);
-
-  const loadStreams = async () => {
+  const loadStreams = useCallback(async () => {
     if (!publicKey) return;
     setLoading(true);
     setError(null);
@@ -65,7 +59,16 @@ export default function StreamsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [publicKey]);
+
+  // Load streams and the current wallet balance when the connected account changes.
+  useEffect(() => {
+    if (!publicKey) return;
+    void loadStreams();
+    void getXLMBalance(publicKey).then(setXlmBalance).catch((err: unknown) => {
+      setError(err instanceof Error ? err.message : "Failed to load balance");
+    });
+  }, [publicKey, loadStreams]);
 
   const handleOpenStream = async (e: React.FormEvent) => {
     e.preventDefault();
