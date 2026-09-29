@@ -74,7 +74,7 @@ jobs:
           targets: wasm32v1-none
       - uses: Swatinem/rust-cache@v2
       - name: Install native dependencies for Stellar CLI
-        run: sudo apt-get update && sudo apt-get install --yes pkg-config libdbus-1-dev
+        run: sudo apt-get update && sudo apt-get install --yes pkg-config libdbus-1-dev libudev-dev
       - name: Install Stellar CLI required by Soroban SDK
         run: cargo install --locked stellar-cli --version 27.1.0
       - run: cargo check --target wasm32v1-none
