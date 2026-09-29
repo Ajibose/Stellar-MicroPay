@@ -60,6 +60,18 @@ pub struct ReceiptMetadata {
     pub ledger: u32,
 }
 
+/// A streaming payment recorded by the contract.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct Stream {
+    pub payer: Address,
+    pub recipient: Address,
+    pub rate_per_ledger: i128,
+    pub deposited: i128,
+    pub claimed: i128,
+    pub start_ledger: u32,
+}
+
 /// Storage key for per-recipient tip totals
 #[contracttype]
 pub enum DataKey {
@@ -72,6 +84,12 @@ pub enum DataKey {
     ReceiptCount(Address),
     /// Receipt record indexed by (payer, index)
     ReceiptRecord(Address, u32),
+    /// Next stream ID to assign
+    StreamCount,
+    /// Stream record indexed by ID
+    StreamRecord(u32),
+    /// IDs of currently open streams for a payer
+    StreamList(Address),
 }
 
 // ─── Contract ─────────────────────────────────────────────────────────────────
@@ -92,6 +110,113 @@ impl MicroPayContract {
             panic!("Contract already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+    }
+
+    // ─── Streaming payments ──────────────────────────────────────────────────
+
+    /// Open a stream and add its ID to the payer's active stream list.
+    pub fn open_stream(
+        env: Env,
+        payer: Address,
+        recipient: Address,
+        rate_per_ledger: i128,
+        deposit: i128,
+    ) -> u32 {
+        payer.require_auth();
+        if rate_per_ledger <= 0 {
+            panic!("Stream rate must be positive");
+        }
+        if deposit <= 0 {
+            panic!("Stream deposit must be positive");
+        }
+
+        let stream_id: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::StreamCount)
+            .unwrap_or(0);
+        let stream = Stream {
+            payer: payer.clone(),
+            recipient,
+            rate_per_ledger,
+            deposited: deposit,
+            claimed: 0,
+            start_ledger: env.ledger().sequence(),
+        };
+        env.storage()
+            .instance()
+            .set(&DataKey::StreamRecord(stream_id), &stream);
+        env.storage()
+            .instance()
+            .set(&DataKey::StreamCount, &(stream_id + 1));
+
+        let mut stream_ids: soroban_sdk::Vec<u32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::StreamList(payer.clone()))
+            .unwrap_or(soroban_sdk::Vec::new(&env));
+        stream_ids.push_back(stream_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::StreamList(payer), &stream_ids);
+
+        stream_id
+    }
+
+    /// Close a stream and remove its ID from the payer's active stream list.
+    pub fn close_stream(env: Env, stream_id: u32, payer: Address) -> i128 {
+        payer.require_auth();
+        let stream: Stream = env
+            .storage()
+            .instance()
+            .get(&DataKey::StreamRecord(stream_id))
+            .expect("Stream not found");
+        if stream.payer != payer {
+            panic!("Only the stream payer can close it");
+        }
+
+        let stream_ids: soroban_sdk::Vec<u32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::StreamList(payer.clone()))
+            .unwrap_or(soroban_sdk::Vec::new(&env));
+        let mut remaining_ids = soroban_sdk::Vec::new(&env);
+        let mut found = false;
+        for id in stream_ids.iter() {
+            if id == stream_id {
+                found = true;
+            } else {
+                remaining_ids.push_back(id);
+            }
+        }
+        if !found {
+            panic!("Stream is already closed");
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::StreamList(payer), &remaining_ids);
+
+        let elapsed_ledgers = env
+            .ledger()
+            .sequence()
+            .saturating_sub(stream.start_ledger);
+        let streamed = stream
+            .rate_per_ledger
+            .saturating_mul(elapsed_ledgers as i128)
+            .max(stream.claimed)
+            .min(stream.deposited);
+        stream.deposited - streamed
+    }
+
+    /// Return the IDs of a payer's currently open streams.
+    pub fn get_all_streams_for_payer(
+        env: Env,
+        payer: Address,
+    ) -> soroban_sdk::Vec<u32> {
+        env.storage()
+            .instance()
+            .get(&DataKey::StreamList(payer))
+            .unwrap_or(soroban_sdk::Vec::new(&env))
     }
 
     // ─── Tipping ─────────────────────────────────────────────────────────────
@@ -321,6 +446,27 @@ mod tests {
         client.initialize(&admin);
 
         assert_eq!(client.get_admin(), admin);
+    }
+
+    #[test]
+    fn test_get_all_streams_for_payer_returns_only_open_streams() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
+        let payer = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        env.mock_all_auths();
+
+        let first_id = client.open_stream(&payer, &recipient, &10, &100);
+        let second_id = client.open_stream(&payer, &recipient, &10, &100);
+        let closed_id = client.open_stream(&payer, &recipient, &10, &100);
+
+        client.close_stream(&closed_id, &payer);
+
+        let open_ids = client.get_all_streams_for_payer(&payer);
+        assert_eq!(open_ids.len(), 2);
+        assert_eq!(open_ids.get(0), Some(first_id));
+        assert_eq!(open_ids.get(1), Some(second_id));
     }
 
     #[test]
