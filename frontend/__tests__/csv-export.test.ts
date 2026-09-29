@@ -46,7 +46,6 @@ beforeEach(() => {
       csvBodies.push(parts[0]);
     }
   } as unknown as new (parts: string[]) => { parts: string[] };
-  // eslint-disable-next-line no-global-assign
   (global as { Blob: unknown }).Blob = FakeBlob;
 
   Object.defineProperty(window.URL, "createObjectURL", {
@@ -73,7 +72,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // eslint-disable-next-line no-global-assign
   (global as { Blob: unknown }).Blob = originalBlob;
   jest.restoreAllMocks();
 });
