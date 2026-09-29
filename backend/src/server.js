@@ -62,13 +62,6 @@ app.use(
   })
 );
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
-
-app.use("/api/auth",     authRoutes);
-app.use("/api/accounts", accountRoutes);
-app.use("/api/payments", paymentRoutes);
-app.use("/health",       healthRoutes);
-
 // Global rate limiting — 100 requests per 15 minutes per IP
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -81,8 +74,10 @@ app.use(limiter);
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
+app.use("/api/auth", authRoutes);
 app.use("/api/accounts", accountRoutes);
 app.use("/api/payments", paymentRoutes);
+app.use("/health", healthRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/health", healthRoutes);
 app.use("/api/turrets", turretsRoutes);
@@ -127,7 +122,7 @@ SERVER = "https://${domain}/federation"
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 if (require.main === module) {
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`
   ✨ Stellar MicroPay API
   🚀 Server running at http://localhost:${PORT}
@@ -136,6 +131,18 @@ if (require.main === module) {
   });
 
   startTurretsServer();
+
+  const shutdown = () => {
+    console.log("Shutting down... clearing timers.");
+    const { stopRunner } = require("./services/turretsService");
+    stopRunner();
+    server.close(() => {
+      process.exit(0);
+    });
+  };
+
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 }
 
 module.exports = app;

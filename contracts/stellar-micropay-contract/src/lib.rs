@@ -72,7 +72,24 @@ pub enum DataKey {
     ReceiptCount(Address),
     /// Receipt record indexed by (payer, index)
     ReceiptRecord(Address, u32),
+    /// Operator fee, in basis points, charged on every tip
+    FeeBps,
 }
+
+/// Event payload emitted when a tip is sent, capturing the gross tip
+/// amount and any operator fee that was deducted from it.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TipEventData {
+    pub amount: i128,
+    pub fee_amount: i128,
+}
+
+/// Maximum operator fee the admin may configure, in basis points (5%).
+const MAX_FEE_BPS: u32 = 500;
+
+/// Basis-point denominator: 1 bps = 1 / 10_000.
+const FEE_BPS_DENOMINATOR: i128 = 10_000;
 
 // ─── Contract ─────────────────────────────────────────────────────────────────
 
@@ -132,7 +149,9 @@ impl MicroPayContract {
     ///   - to:            The recipient
     ///   - amount:        Amount in the token's smallest unit (stroops for XLM)
     ///
-    /// This records the tip on-chain for analytics and emits an event.
+    /// If an operator fee is configured (see `set_fee_bps`), `amount * fee_bps / 10000`
+    /// is transferred to the admin and the remainder to `to`. This records the tip
+    /// on-chain for analytics and emits an event.
     pub fn send_tip(
         env: Env,
         token_address: Address,
@@ -148,9 +167,27 @@ impl MicroPayContract {
             panic!("Tip amount must be positive");
         }
 
+        let fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeBps)
+            .unwrap_or(0);
+        let fee_amount: i128 = (amount * fee_bps as i128) / FEE_BPS_DENOMINATOR;
+        let net_amount: i128 = amount - fee_amount;
+
         // Transfer tokens via the Stellar token interface (SAC)
         let token = token::Client::new(&env, &token_address);
-        token.transfer(&from, &to, &amount);
+
+        if fee_amount > 0 {
+            let admin: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::Admin)
+                .expect("Contract not initialized");
+            token.transfer(&from, &admin, &fee_amount);
+        }
+
+        token.transfer(&from, &to, &net_amount);
 
         // Update on-chain tip totals for the recipient
         let current_total: i128 = env
@@ -184,11 +221,44 @@ impl MicroPayContract {
             .instance()
             .set(&DataKey::TipRecord(to.clone(), current_count), &record);
 
-        // Emit an event for indexers
+        // Emit an event for indexers, including the fee collected (if any)
         env.events().publish(
             (Symbol::new(&env, "tip"), from, to.clone()),
-            amount,
+            TipEventData { amount, fee_amount },
         );
+    }
+
+    // ─── Fees ────────────────────────────────────────────────────────────────
+
+    /// Set the operator fee charged on every tip, in basis points
+    /// (1 bps = 0.01%). Capped at 500 bps (5%). Only callable by the
+    /// current admin. A `fee_bps` of 0 disables the fee (the default).
+    pub fn set_fee_bps(env: Env, admin: Address, fee_bps: u32) {
+        admin.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Contract not initialized");
+
+        if admin != stored_admin {
+            panic!("Only the admin can set the fee");
+        }
+
+        if fee_bps > MAX_FEE_BPS {
+            panic!("Fee exceeds maximum allowed (500 bps)");
+        }
+
+        env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+    }
+
+    /// Get the currently configured operator fee, in basis points.
+    pub fn get_fee_bps(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::FeeBps)
+            .unwrap_or(0)
     }
 
     // ─── Getters ─────────────────────────────────────────────────────────────
