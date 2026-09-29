@@ -1,4 +1,4 @@
-declare module "@ledgerhq/hw-app-stellar" {
+declare module "@ledgerhq/hw-app-str" {
   const _default: any;
   export default _default;
 }
