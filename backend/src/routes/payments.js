@@ -9,7 +9,24 @@ const express = require("express");
 const router = express.Router();
 const { strictLimiter } = require("../middleware/rateLimit");
 const { sanitizePublicKey } = require("../middleware/sanitization");
+const { requireSignedRequest } = require("../middleware/requestSignature");
 const paymentController = require("../controllers/paymentController");
+
+/**
+ * POST /api/payments/submit
+ * Record a payment the client has already signed and broadcast.
+ *
+ * Protected by the X-Timestamp / X-Signature pair: a captured request is
+ * rejected once it is more than 30s old, and its signature covers the method,
+ * path and body hash, so it cannot be edited in transit to change the amount.
+ * Requests with a missing, malformed, expired or mismatched signature get 401.
+ */
+router.post(
+  "/submit",
+  strictLimiter,
+  requireSignedRequest,
+  paymentController.submitPayment
+);
 
 /**
  * GET /api/payments/stream-status/:streamId

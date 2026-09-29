@@ -28,6 +28,7 @@ import {
 } from "@/lib/stellar";
 import { Federation } from "@stellar/stellar-sdk";
 import { signTransactionWithWallet } from "@/lib/wallet";
+import { submitSignedPayment } from "@/lib/paymentApi";
 import { formatXLM, shortenAddress } from "@/utils/format";
 import clsx from "clsx";
 import { useEffect, useRef, useState } from "react";
@@ -607,6 +608,22 @@ export default function SendPaymentForm({
       setStatus("confirming");
       await waitForTransactionConfirmation(result.hash);
       markStepCompleted("confirming");
+
+      // The payment is already final on Horizon at this point, so recording it
+      // is best-effort: a failure here must not surface as a failed payment.
+      // The request carries X-Timestamp/X-Signature so a captured copy cannot
+      // be replayed into a duplicate submission once the window closes.
+      try {
+        await submitSignedPayment({
+          senderPublicKey: publicKey,
+          recipientPublicKey: destination,
+          amount: amountNum.toFixed(7),
+          asset: selectedAsset,
+          txHash: result.hash,
+        });
+      } catch (err) {
+        console.error("Failed to record payment submission:", err);
+      }
 
       setStatus("success");
       saveRecipient(destination);

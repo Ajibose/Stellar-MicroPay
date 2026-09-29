@@ -23,6 +23,7 @@ const tipsRoutes = require("./routes/tips");
 const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./swagger");
 const { startTurretsServer } = require("./turretsServer");
+const { validateEnv } = require("./config/validateEnv");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -31,7 +32,19 @@ const PORT = process.env.PORT || 4000;
 
 app.use(helmet());
 app.use(morgan("dev"));
-app.use(express.json({ limit: "10kb" }));
+// Keep the raw request bytes for the signature check (see
+// middleware/requestSignature.js). Signing a re-serialised `req.body` instead
+// would make verification depend on JSON key ordering matching between client
+// and server — a mismatch there silently accepts a signature over bytes the
+// client never sent. The 10kb limit below bounds what this retains.
+app.use(
+  express.json({
+    limit: "10kb",
+    verify: (req, _res, buf) => {
+      req.rawBody = buf.toString("utf8");
+    },
+  })
+);
 
 // JSON parsing error handler
 app.use((err, req, res, next) => {
@@ -57,7 +70,11 @@ app.use(
       }
     },
     methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    // X-Timestamp / X-Signature carry the request signature for endpoints that
+    // require one. CORS only permits headers a browser is told are safe, so an
+    // omitted entry here makes the browser drop the pair in preflight and the
+    // request arrives unsigned.
+    allowedHeaders: ["Content-Type", "Authorization", "X-Timestamp", "X-Signature"],
     credentials: true,
   })
 );
@@ -122,6 +139,10 @@ SERVER = "https://${domain}/federation"
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 if (require.main === module) {
+  // Refuse to start on an insecure configuration rather than serving traffic
+  // with a publicly-known signing key.
+  validateEnv();
+
   const server = app.listen(PORT, () => {
     console.log(`
   ✨ Stellar MicroPay API
