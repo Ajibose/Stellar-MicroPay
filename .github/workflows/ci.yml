@@ -65,6 +65,12 @@ jobs:
   contracts:
     name: Soroban contract (check, test, WASM)
     runs-on: ubuntu-latest
+    env:
+      # soroban-sdk 28 refuses to compile for wasm unless the build system
+      # declares spec-shaking support. stellar-cli >= 25.2.0 sets this itself;
+      # a plain cargo build needs the explicit opt-in, otherwise the job fails
+      # with "soroban-sdk requires stellar-cli v25.2.0+ to build a contract".
+      SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

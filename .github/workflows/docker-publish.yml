@@ -42,6 +42,10 @@ jobs:
 
       - name: Build contract WASM
         working-directory: contracts/stellar-micropay-contract
+        env:
+          # See ci.yml: a plain cargo build needs the explicit spec-shaking
+          # opt-in required by soroban-sdk 28 (stellar-cli sets it by itself).
+          SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2: "1"
         run: cargo build --target wasm32v1-none --release
 
       - name: Install Syft
