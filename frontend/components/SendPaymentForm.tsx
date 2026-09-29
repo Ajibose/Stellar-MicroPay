@@ -437,7 +437,7 @@ export default function SendPaymentForm({
           return;
         }
 
-        const result = await Federation.resolve(domain, name);
+        const result = await Federation.Server.resolve(`${name}*${domain}`);
         if (result.account_id) {
           setFederationResolvedAddress(result.account_id);
         } else {
@@ -814,6 +814,7 @@ export default function SendPaymentForm({
                     key={address}
                     type="button"
                     role="option"
+                    aria-selected={destination === address}
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => { setDestination(address); setIsRecentDropdownOpen(false); }}
                     className="flex w-full items-center justify-between px-3 py-2 text-left font-mono text-sm text-slate-200 hover:bg-white/5"
