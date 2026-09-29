@@ -113,7 +113,7 @@ Object.defineProperty(exports as any, "HORIZON_URL", {
   enumerable: true
 });
 
-Object.defineProperty(exports as any, "getNetworkPassphrase()", {
+Object.defineProperty(exports as any, "NETWORK_PASSPHRASE", {
   get: function() {
     if (_legacyNetworkPassphraseCache === undefined) {
       _legacyNetworkPassphraseCache = getNetworkPassphrase();
@@ -191,7 +191,7 @@ const ELEVATED_FEE_MAX_STROOPS = STELLAR_BASE_FEE_STROOPS * 10;
  * control characters that have no business being rendered as text.
  */
 function stripNonPrintableCharacters(memo: string): string {
-   // -- intentionally matching C0/C1 control characters
+  // eslint-disable-next-line no-control-regex -- intentionally matching C0/C1 control characters
   return memo.replace(/[\u0000-\u001F\u007F-\u009F]/g, "");
 }
 
