@@ -4,11 +4,18 @@
  */
 
 import type { AppProps } from "next/app";
-import { useState, useEffect, createContext, useContext } from "react";
+import dynamic from "next/dynamic";
+import { useState, useEffect, createContext, useContext, useCallback } from "react";
+import { useRouter } from "next/router";
 import Head from "next/head";
 import Navbar from "@/components/Navbar";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import QuickSendModal from "@/components/QuickSendModal";
 import { WalletProvider, useWallet } from "@/lib/useWallet";
+
+const AIPaymentAssistant = dynamic(() => import("@/components/AIPaymentAssistant"), {
+  ssr: false,
+});
 import {
   getStellarURIFromURL,
   registerProtocolHandler,
@@ -120,8 +127,7 @@ function AppShell({
   setIsQuickSendOpen: (isOpen: boolean) => void;
 }) {
   const { publicKey } = useWallet();
-  const [isOffline, setIsOffline] = useState(false);
-  useEffect(() => { const sync = () => setIsOffline(!navigator.onLine); sync(); window.addEventListener("online", sync); window.addEventListener("offline", sync); return () => { window.removeEventListener("online", sync); window.removeEventListener("offline", sync); }; }, []);
+
 
   return (
     <>
@@ -129,7 +135,7 @@ function AppShell({
         <div role="alert" className="w-full bg-amber-500/15 px-4 py-2 text-center text-sm text-amber-200">You&apos;re offline — data may not be up to date.</div>
       )}
       <div className="min-h-screen bg-white bg-grid transition-colors duration-300 dark:bg-cosmos-900">
-        <Navbar />
+        <Navbar onOpenAssistant={() => setIsAssistantOpen(true)} />
         <main>
           <Component {...pageProps} stellarURI={stellarURI} />
         </main>
@@ -145,6 +151,12 @@ function AppShell({
           usdcBalance={null}
         />
       )}
+
+      <AIPaymentAssistant
+        isOpen={isAssistantOpen}
+        onClose={() => setIsAssistantOpen(false)}
+        onConfirm={handleAssistantConfirm}
+      />
     </>
   );
 }
@@ -244,13 +256,15 @@ export default function App({ Component, pageProps }: AppProps) {
           />
         </Head>
 
-        <AppShell
-          Component={Component}
-          pageProps={pageProps}
-          stellarURI={stellarURI}
-          isQuickSendOpen={isQuickSendOpen}
-          setIsQuickSendOpen={setIsQuickSendOpen}
-        />
+        <ErrorBoundary>
+          <AppShell
+            Component={Component}
+            pageProps={pageProps}
+            stellarURI={stellarURI}
+            isQuickSendOpen={isQuickSendOpen}
+            setIsQuickSendOpen={setIsQuickSendOpen}
+          />
+        </ErrorBoundary>
       </WalletProvider>
     </ThemeContext.Provider>
   );
