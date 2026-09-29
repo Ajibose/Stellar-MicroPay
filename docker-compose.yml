@@ -24,6 +24,7 @@ services:
       - STELLAR_NETWORK=testnet
       - HORIZON_URL=https://horizon-testnet.stellar.org
       - ALLOWED_ORIGINS=http://localhost:3000
+      - JWT_SECRET
     volumes:
       # Mount source for hot-reload via nodemon
       - ./backend:/app

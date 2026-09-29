@@ -114,6 +114,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Start stack with docker compose
+        env:
+          JWT_SECRET: ci-only-test-secret-not-for-production
         run: docker compose up -d --build
       - name: Wait for backend healthcheck
         run: |
