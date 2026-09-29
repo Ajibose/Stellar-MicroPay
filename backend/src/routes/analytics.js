@@ -8,8 +8,7 @@
 const express = require("express");
 const router = express.Router();
 const { strictLimiter } = require("../middleware/rateLimit");
-const { verifyJWT } = require("../middleware/auth");
-const { sanitizePublicKey } = require("../middleware/sanitization");
+const { validatePublicKey } = require("../middleware/sanitization");
 const analyticsController = require("../controllers/analyticsController");
 
 // Only accounts listed in ADMIN_PUBLIC_KEYS may invalidate the cache.
@@ -47,7 +46,7 @@ function requireAdmin(req, res, next) {
 router.get(
   "/:publicKey/summary",
   strictLimiter,
-  sanitizePublicKey,
+  validatePublicKey(),
   analyticsController.getSummary
 );
 
@@ -58,7 +57,7 @@ router.get(
 router.get(
   "/:publicKey/top-recipients",
   strictLimiter,
-  sanitizePublicKey,
+  validatePublicKey(),
   analyticsController.getTopRecipients
 );
 
@@ -69,7 +68,7 @@ router.get(
 router.get(
   "/:publicKey/activity",
   strictLimiter,
-  sanitizePublicKey,
+  validatePublicKey(),
   analyticsController.getActivityByDay
 );
 
