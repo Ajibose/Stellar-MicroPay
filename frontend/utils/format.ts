@@ -36,7 +36,7 @@ function getAssetFormatRule(assetCode?: string): AssetFormatRule {
  * Shorten a Stellar address for display (e.g. GABC...XYZ1)
  */
 export function shortenAddress(address: string, chars = 4): string {
-  if (!address || address.length < chars * 2 + 2) return address;
+  if (!address || address.length <= chars * 2 + 3) return address;
   return `${address.slice(0, chars)}...${address.slice(-chars)}`;
 }
 
@@ -201,6 +201,8 @@ export function parseAddressBookCSV(csv: string) {
  * Format a USD value with 2 decimal places (e.g. "≈ $142.50 USD").
  */
 export function formatUSD(usdValue: number): string {
+  if (usdValue == null) return `≈ $0.00 USD`;
+  if (isNaN(usdValue)) return `≈ $NaN USD`;
   return `≈ $${usdValue.toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,

@@ -4,7 +4,7 @@
  * Allows users to open, view, claim, and close streaming payments.
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useWallet } from "@/lib/useWallet";
 import { signTransactionWithWallet } from "@/lib/wallet";
 import { formatXLM } from "@/utils/format";
@@ -30,7 +30,7 @@ interface NewStreamForm {
 }
 
 export default function StreamsPage() {
-  const { publicKey, xlmBalance } = useWallet();
+  const { publicKey, xlmBalance } = useWallet() as any;
   const [activeTab, setActiveTab] = useState<"open" | "my-streams" | "received">("open");
   const [myStreams, setMyStreams] = useState<Stream[]>([]);
   const [receivedStreams, setReceivedStreams] = useState<Stream[]>([]);
@@ -45,13 +45,7 @@ export default function StreamsPage() {
   });
 
   // Load streams on mount
-  useEffect(() => {
-    if (publicKey) {
-      loadStreams();
-    }
-  }, [publicKey]);
-
-  const loadStreams = async () => {
+  const loadStreams = useCallback(async () => {
     if (!publicKey) return;
     setLoading(true);
     setError(null);
@@ -65,7 +59,13 @@ export default function StreamsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [publicKey]);
+
+  useEffect(() => {
+    if (publicKey) {
+      loadStreams();
+    }
+  }, [publicKey, loadStreams]);
 
   const handleOpenStream = async (e: React.FormEvent) => {
     e.preventDefault();
