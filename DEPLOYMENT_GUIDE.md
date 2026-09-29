@@ -31,13 +31,13 @@ Before deploying the backend, you must configure the following environment varia
    # Generate a cryptographically secure random secret
    openssl rand -base64 48
    ```
-   
+
    Add this to your `.env` file or environment:
    ```bash
    JWT_SECRET=<generated_secret_here>
    ```
-   
-   **IMPORTANT**: 
+
+   **IMPORTANT**:
    - NEVER commit the JWT_SECRET to version control
    - Use a different secret for each environment (dev, staging, production)
    - The application will refuse to start if JWT_SECRET is not set
@@ -53,13 +53,13 @@ Before deploying the backend, you must configure the following environment varia
    # Generate a cryptographically secure random secret
    openssl rand -base64 48
    ```
-   
+
    Add this to your `.env` file or environment:
    ```bash
    JWT_SECRET=<generated_secret_here>
    ```
-   
-   **IMPORTANT**: 
+
+   **IMPORTANT**:
    - NEVER commit the JWT_SECRET to version control
    - Use a different secret for each environment (dev, staging, production)
    - The application will refuse to start if JWT_SECRET is not set

@@ -433,10 +433,27 @@ async function getCohortBreakdown(publicKey, { period = "month", periods = 6 } =
   });
 }
 
-const emailService = require("./emailService");
-
 // In-memory store for scheduled exports: Map<publicKey, { email, frequency, nextRunAt }>
 const exportSchedules = new Map();
+
+/**
+ * Resolve the email transport lazily.
+ *
+ * The SMTP transport is an optional dependency: deployments without an email
+ * provider still load this module, and only fail if an export is actually
+ * triggered. Resolving on demand keeps `require` side-effect free for the
+ * analytics read paths.
+ *
+ * @returns {{ sendEmail: (opts: { to: string, subject: string, html: string }) => Promise<unknown> } | null}
+ */
+function getEmailService() {
+  try {
+    // eslint-disable-next-line global-require
+    return require("./emailService");
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Opt-in/schedule a recurring email export.
@@ -519,6 +536,15 @@ async function triggerEmailExport(publicKey) {
       ${activity.activityByDay.map(d => `<li>${d.day}: ${d.transactionCount} payments</li>`).join("")}
     </ul>
   `;
+
+  const emailService = getEmailService();
+  if (!emailService) {
+    const error = new Error(
+      "Scheduled email exports are unavailable: no email transport is configured"
+    );
+    error.status = 501;
+    throw error;
+  }
 
   await emailService.sendEmail({
     to: schedule.email,

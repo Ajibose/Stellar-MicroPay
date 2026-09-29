@@ -72,15 +72,17 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32v1-none
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --target wasm32v1-none --release
+      - name: Install stellar-cli
+        run: cargo install stellar-cli --version ^25.2.0 --locked
+      - name: Build contract WASM
+        working-directory: contracts/stellar-micropay-contract
+        run: stellar contract build
       - run: cargo test
       - uses: actions/upload-artifact@v4
         with:
           name: stellar-micropay-contract-wasm
-          path: target/wasm32v1-none/release/stellar_micropay_contract.wasm
+          path: contracts/stellar-micropay-contract/target/wasm32v1-none/release/stellar_micropay_contract.wasm
           if-no-files-found: error
 
   e2e:
