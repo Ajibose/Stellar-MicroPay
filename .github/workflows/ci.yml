@@ -74,7 +74,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install stellar-cli
-        run: cargo install stellar-cli --version ^25.2.0 --locked
+        uses: stellar/stellar-cli@v1
+        with:
+          version: "25.2.0"
       - name: Build contract WASM
         working-directory: contracts/stellar-micropay-contract
         run: stellar contract build

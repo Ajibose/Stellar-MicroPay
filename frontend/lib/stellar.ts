@@ -91,8 +91,6 @@ export const NETWORK: "testnet" | "mainnet" = getNetwork();
 export const HORIZON_URL: string = getHorizonUrl();
 export const NETWORK_PASSPHRASE: string = getNetworkPassphrase();
 
-});
-
 /** Pre-configured Horizon server instance for the active network. */
 let _server: Horizon.Server | null = null;
 export function getServer(): Horizon.Server {

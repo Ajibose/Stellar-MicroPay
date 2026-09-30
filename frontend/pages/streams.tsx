@@ -44,13 +44,6 @@ export default function StreamsPage() {
     deposit: "",
   });
 
-  // Load streams on mount
-  useEffect(() => {
-    if (publicKey) {
-      loadStreams();
-    }
-  }, [publicKey]);
-
   const loadStreams = async () => {
     if (!publicKey) return;
     setLoading(true);
@@ -66,6 +59,13 @@ export default function StreamsPage() {
       setLoading(false);
     }
   };
+
+  // Load streams on mount
+  useEffect(() => {
+    if (publicKey) {
+      loadStreams();
+    }
+  }, [publicKey]);
 
   const handleOpenStream = async (e: React.FormEvent) => {
     e.preventDefault();
