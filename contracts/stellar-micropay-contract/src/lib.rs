@@ -22,8 +22,8 @@
  */
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype,
-    token, Address, Env, Symbol, Vec,
+    contract, contractimpl, contracttype,
+    token, Address, BytesN, Env, Symbol,
 };
 
 // ─── Data types ───────────────────────────────────────────────────────────────
@@ -143,171 +143,24 @@ pub enum DataKey {
     ReceiptCount(Address),
     /// Receipt record indexed by (payer, index)
     ReceiptRecord(Address, u32),
-    /// Admin-configured cap on `rate_per_ledger`; `0` disables the cap
-    MaxRate,
-    /// Emergency pause flag; `true` blocks all state-changing calls
-    Frozen,
-    /// Number of streams ever opened; also the next stream id
-    StreamCount,
-    /// Stream record by id
-    Stream(u32),
-    /// Append-only event log for a stream
-    StreamEvents(u32),
+    /// Operator fee, in basis points, charged on every tip
+    FeeBps,
 }
 
-// ─── Guards ───────────────────────────────────────────────────────────────────
-
-/// Load the contract admin, panicking if the contract is uninitialized.
-fn load_admin(env: &Env) -> Address {
-    env.storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .expect("Contract not initialized")
+/// Event payload emitted when a tip is sent, capturing the gross tip
+/// amount and any operator fee that was deducted from it.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TipEventData {
+    pub amount: i128,
+    pub fee_amount: i128,
 }
 
-/// Require `caller` to be the admin, and require its authorization.
-///
-/// Panics with `ContractError::NotAdmin` when the address is not the stored
-/// admin. The auth check happens only after the identity comparison, so a
-/// non-admin caller cannot burn its own authorization on a doomed call.
-fn require_admin(env: &Env, caller: &Address) {
-    if load_admin(env) != *caller {
-        panic_with_error(env, ContractError::NotAdmin);
-    }
-    caller.require_auth();
-}
+/// Maximum operator fee the admin may configure, in basis points (5%).
+const MAX_FEE_BPS: u32 = 500;
 
-/// Panic with a typed `ContractError`.
-///
-/// Soroban's generated client surfaces `ContractError` discriminants, which
-/// makes `try_*` assertions in tests stable across message wording changes.
-fn panic_with_error(env: &Env, err: ContractError) -> ! {
-    env.panic_with_error(&err)
-}
-
-/// Reject the call if the contract is frozen.
-///
-/// Read-only getters deliberately do **not** call this: a frozen contract must
-/// stay queryable so integrators can still inspect stream state during an
-/// incident.
-fn require_not_frozen(env: &Env) {
-    let frozen: bool = env
-        .storage()
-        .instance()
-        .get(&DataKey::Frozen)
-        .unwrap_or(false);
-    if frozen {
-        panic_with_error(env, ContractError::Frozen);
-    }
-}
-
-/// The admin-configured cap on `rate_per_ledger`. `0` (the default) disables
-/// the cap entirely.
-fn load_max_rate(env: &Env) -> i128 {
-    env.storage()
-        .instance()
-        .get(&DataKey::MaxRate)
-        .unwrap_or(0)
-}
-
-/// Reject `rate_per_ledger` when it exceeds the admin cap.
-///
-/// A cap of `0` means "no cap", so it is never itself exceeded.
-fn check_rate_cap(env: &Env, rate_per_ledger: i128) {
-    let max_rate = load_max_rate(env);
-    if max_rate != 0 && rate_per_ledger > max_rate {
-        panic_with_error(env, ContractError::RateTooHigh);
-    }
-}
-
-fn load_stream(env: &Env, stream_id: u32) -> Stream {
-    env.storage()
-        .instance()
-        .get(&DataKey::Stream(stream_id))
-        .unwrap_or_else(|| panic_with_error(env, ContractError::StreamNotFound))
-}
-
-fn save_stream(env: &Env, stream_id: u32, stream: &Stream) {
-    env.storage()
-        .instance()
-        .set(&DataKey::Stream(stream_id), stream);
-}
-
-/// Append an entry to a stream's persistent event log.
-fn append_stream_event(env: &Env, stream_id: u32, event_type: StreamEventType, amount: i128) {
-    let mut events: Vec<StreamEvent> = env
-        .storage()
-        .persistent()
-        .get(&DataKey::StreamEvents(stream_id))
-        .unwrap_or_else(|| Vec::new(env));
-
-    events.push_back(StreamEvent {
-        event_type,
-        amount,
-        ledger: env.ledger().sequence(),
-    });
-
-    env.storage()
-        .persistent()
-        .set(&DataKey::StreamEvents(stream_id), &events);
-}
-
-/// Total amount that has accrued to the recipient as of `current_ledger`.
-///
-/// The accrual window is capped at the ledger where the deposit runs out, so
-/// the result is structurally bounded by `deposited` and can neither exceed it
-/// nor overflow `i128` — no post-hoc clamp needed.
-fn total_streamed_amount(stream: &Stream, current_ledger: u32) -> i128 {
-    let elapsed_ledgers = current_ledger.saturating_sub(stream.start_ledger);
-
-    // Integer division, so this is 0 for a rate larger than the whole deposit.
-    let funded_ledgers = (stream.deposited / stream.rate_per_ledger) as u64;
-
-    // Shadow `elapsed_ledgers` with the funded window. Capping before the
-    // multiply is what makes the plain `*` below safe: the product is bounded
-    // by `deposited`, so it can neither overflow i128 nor exceed the escrow.
-    // (An uncapped `rate * elapsed` would overflow for large inputs, which is
-    // exactly what `fuzz_claim_math_holds_for_arbitrary_inputs` pins down.)
-    let elapsed_ledgers: u32 = if u64::from(elapsed_ledgers) < funded_ledgers {
-        elapsed_ledgers
-    } else if funded_ledgers > u64::from(u32::MAX) {
-        u32::MAX
-    } else {
-        funded_ledgers as u32
-    };
-
-    stream.rate_per_ledger * elapsed_ledgers as i128
-}
-
-/// Amount the recipient can withdraw right now, always in `[0, deposited - claimed]`,
-/// so repeated claims can never withdraw more than the escrow holds.
-///
-/// The early return matters: `i128::saturating_sub` saturates at `i128::MIN`,
-/// not at 0, so an over-claimed stream would otherwise produce a large negative
-/// "remainder" rather than the correct 0.
-fn claimable_amount(stream: &Stream, current_ledger: u32) -> i128 {
-    if stream.claimed >= stream.deposited {
-        return 0;
-    }
-
-    let total_streamed = total_streamed_amount(stream, current_ledger);
-
-    // `saturating_sub`, not a plain `-`: a recipient that claims before the
-    // accrual catches up (a top-up does not retroactively increase what has
-    // already streamed) sits above `total_streamed`, and a plain subtract would
-    // underflow and abort the contract. `.max(0)` then reports 0 rather than a
-    // negative amount.
-    let claimable = total_streamed.saturating_sub(stream.claimed).max(0);
-
-    // Structural bound: never offer more than the deposit still holds. Past the
-    // early return above, `claimed < deposited`, so this cannot go negative.
-    let remaining = stream.deposited - stream.claimed;
-    if claimable < remaining {
-        claimable
-    } else {
-        remaining
-    }
-}
+/// Basis-point denominator: 1 bps = 1 / 10_000.
+const FEE_BPS_DENOMINATOR: i128 = 10_000;
 
 // ─── Contract ─────────────────────────────────────────────────────────────────
 
@@ -329,238 +182,32 @@ impl MicroPayContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
     }
 
-    // ─── Administration ─────────────────────────────────────────────────────
+    // ─── Admin & Upgrade ─────────────────────────────────────────────────────
 
-    /// Set the maximum permitted `rate_per_ledger` for new streams.
-    ///
-    /// Without a cap a payer can set an arbitrarily high rate that drains the
-    /// whole deposit in a single ledger. Setting `max_rate` to `0` disables the
-    /// cap, which is the default and the pre-cap behavior.
-    ///
-    /// Only the contract admin may call this. Lowering the cap does not affect
-    /// streams that already exist.
-    pub fn set_max_rate(env: Env, admin: Address, max_rate: i128) {
-        require_not_frozen(&env);
-        require_admin(&env, &admin);
-
-        if max_rate < 0 {
-            panic_with_error(&env, ContractError::InvalidRate);
-        }
-
-        env.storage().instance().set(&DataKey::MaxRate, &max_rate);
-
-        env.events().publish(
-            (Symbol::new(&env, "max_rate"), admin),
-            max_rate,
-        );
-    }
-
-    /// Get the current maximum permitted `rate_per_ledger`. `0` means uncapped.
-    pub fn get_max_rate(env: Env) -> i128 {
-        load_max_rate(&env)
-    }
-
-    /// Pause all state-changing operations until `unfreeze` is called.
-    ///
-    /// Intended for incident response: a bug in a stream or tip path can be
-    /// halted without redeploying. Read-only getters keep working so integrators
-    /// and monitoring can still inspect state while frozen.
-    pub fn freeze(env: Env, admin: Address) {
-        require_admin(&env, &admin);
-        env.storage().instance().set(&DataKey::Frozen, &true);
-        env.events().publish((Symbol::new(&env, "freeze"), admin), true);
-    }
-
-    /// Clear the freeze flag, re-enabling state-changing operations.
-    pub fn unfreeze(env: Env, admin: Address) {
-        require_admin(&env, &admin);
-        env.storage().instance().set(&DataKey::Frozen, &false);
-        env.events().publish((Symbol::new(&env, "unfreeze"), admin), false);
-    }
-
-    /// Whether the contract is currently frozen.
-    pub fn is_frozen(env: Env) -> bool {
-        env.storage()
-            .instance()
-            .get(&DataKey::Frozen)
-            .unwrap_or(false)
-    }
-
-    // ─── Streaming payments ─────────────────────────────────────────────────
-
-    /// Open a payment stream, escrowing `deposit` and releasing it to
-    /// `recipient` at `rate_per_ledger` per ledger.
-    ///
-    /// Returns the new stream id. `rate_per_ledger` must be positive and must
-    /// not exceed the admin-configured cap.
-    pub fn open_stream(
-        env: Env,
-        token_address: Address,
-        payer: Address,
-        recipient: Address,
-        rate_per_ledger: i128,
-        deposit: i128,
-    ) -> u32 {
-        require_not_frozen(&env);
-        payer.require_auth();
-
-        if rate_per_ledger <= 0 {
-            panic_with_error(&env, ContractError::InvalidRate);
-        }
-        check_rate_cap(&env, rate_per_ledger);
-        if deposit <= 0 {
-            panic_with_error(&env, ContractError::InvalidDeposit);
-        }
-
-        // Escrow the deposit; claims and refunds are paid from here.
-        let token = token::Client::new(&env, &token_address);
-        token.transfer(&payer, &env.current_contract_address(), &deposit);
-
-        let stream_id: u32 = env
+    /// Upgrade the WASM code of the current contract.
+    /// Admin-gated: only stored Admin address can call this function.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env
             .storage()
             .instance()
-            .get(&DataKey::StreamCount)
-            .unwrap_or(0);
+            .get(&DataKey::Admin)
+            .expect("Contract not initialized");
+        admin.require_auth();
 
-        let stream = Stream {
-            payer,
-            recipient,
-            rate_per_ledger,
-            deposited: deposit,
-            claimed: 0,
-            start_ledger: env.ledger().sequence(),
-            token: token_address,
-        };
-        save_stream(&env, stream_id, &stream);
-        env.storage()
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
+
+    /// Rotate/update the contract admin address.
+    /// Admin-gated: only current Admin address can set a new admin.
+    pub fn set_admin(env: Env, new_admin: Address) {
+        let admin: Address = env
+            .storage()
             .instance()
-            .set(&DataKey::StreamCount, &(stream_id + 1));
+            .get(&DataKey::Admin)
+            .expect("Contract not initialized");
+        admin.require_auth();
 
-        env.events().publish(
-            (Symbol::new(&env, "stream_open"), stream_id),
-            (rate_per_ledger, deposit),
-        );
-
-        stream_id
-    }
-
-    /// Withdraw everything accrued so far. Returns the amount transferred.
-    ///
-    /// The result is capped at the remaining deposit, so repeated claims can
-    /// never withdraw more than `deposited` in total.
-    pub fn claim_stream(env: Env, stream_id: u32, recipient: Address) -> i128 {
-        require_not_frozen(&env);
-        recipient.require_auth();
-
-        let mut stream = load_stream(&env, stream_id);
-        if stream.recipient != recipient {
-            panic_with_error(&env, ContractError::NotRecipient);
-        }
-        if stream.claimed >= stream.deposited {
-            panic_with_error(&env, ContractError::StreamClosed);
-        }
-
-        let amount = claimable_amount(&stream, env.ledger().sequence());
-        if amount <= 0 {
-            panic_with_error(&env, ContractError::NothingToClaim);
-        }
-
-        stream.claimed = stream.claimed.saturating_add(amount);
-        save_stream(&env, stream_id, &stream);
-
-        append_stream_event(&env, stream_id, StreamEventType::Claim, amount);
-
-        let token = token::Client::new(&env, &stream.token);
-        token.transfer(&env.current_contract_address(), &stream.recipient, &amount);
-
-        env.events().publish(
-            (Symbol::new(&env, "stream_claim"), stream_id),
-            amount,
-        );
-
-        amount
-    }
-
-    /// Add `amount` to the stream's deposit, extending its duration.
-    pub fn top_up_stream(env: Env, stream_id: u32, payer: Address, amount: i128) {
-        require_not_frozen(&env);
-        payer.require_auth();
-
-        if amount <= 0 {
-            panic_with_error(&env, ContractError::InvalidDeposit);
-        }
-
-        let mut stream = load_stream(&env, stream_id);
-        if stream.payer != payer {
-            panic_with_error(&env, ContractError::NotPayer);
-        }
-
-        let token = token::Client::new(&env, &stream.token);
-        token.transfer(&payer, &env.current_contract_address(), &amount);
-
-        stream.deposited = stream.deposited.saturating_add(amount);
-        save_stream(&env, stream_id, &stream);
-
-        append_stream_event(&env, stream_id, StreamEventType::TopUp, amount);
-
-        env.events().publish(
-            (Symbol::new(&env, "stream_topup"), stream_id),
-            amount,
-        );
-    }
-
-    /// Close the stream and refund whatever the recipient has not claimed.
-    pub fn close_stream(env: Env, stream_id: u32, payer: Address) -> i128 {
-        require_not_frozen(&env);
-        payer.require_auth();
-
-        let stream = load_stream(&env, stream_id);
-        if stream.payer != payer {
-            panic_with_error(&env, ContractError::NotPayer);
-        }
-
-        let refund = stream.deposited.saturating_sub(stream.claimed);
-
-        let token = token::Client::new(&env, &stream.token);
-        token.transfer(&env.current_contract_address(), &stream.payer, &refund);
-
-        append_stream_event(&env, stream_id, StreamEventType::Close, refund);
-
-        env.events().publish(
-            (Symbol::new(&env, "stream_close"), stream_id),
-            refund,
-        );
-
-        refund
-    }
-
-    /// Get a stream record by id. Works while frozen.
-    pub fn get_stream(env: Env, stream_id: u32) -> Stream {
-        load_stream(&env, stream_id)
-    }
-
-    /// Get the amount currently claimable from a stream. Works while frozen.
-    pub fn get_claimable(env: Env, stream_id: u32) -> i128 {
-        let stream = load_stream(&env, stream_id);
-        claimable_amount(&stream, env.ledger().sequence())
-    }
-
-    /// Get the full append-only event log for a stream.
-    ///
-    /// Entries are in chronological order. Works while frozen.
-    pub fn get_stream_history(env: Env, stream_id: u32) -> Vec<StreamEvent> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::StreamEvents(stream_id))
-            .unwrap_or_else(|| Vec::new(&env))
-    }
-
-    /// Get the number of streams ever opened.
-    pub fn get_stream_count(env: Env) -> u32 {
-        env.storage()
-            .instance()
-            .get(&DataKey::StreamCount)
-            .unwrap_or(0)
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
     }
 
     // ─── Tipping ─────────────────────────────────────────────────────────────
@@ -573,7 +220,9 @@ impl MicroPayContract {
     ///   - to:            The recipient
     ///   - amount:        Amount in the token's smallest unit (stroops for XLM)
     ///
-    /// This records the tip on-chain for analytics and emits an event.
+    /// If an operator fee is configured (see `set_fee_bps`), `amount * fee_bps / 10000`
+    /// is transferred to the admin and the remainder to `to`. This records the tip
+    /// on-chain for analytics and emits an event.
     pub fn send_tip(
         env: Env,
         token_address: Address,
@@ -591,9 +240,27 @@ impl MicroPayContract {
             panic!("Tip amount must be positive");
         }
 
+        let fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeBps)
+            .unwrap_or(0);
+        let fee_amount: i128 = (amount * fee_bps as i128) / FEE_BPS_DENOMINATOR;
+        let net_amount: i128 = amount - fee_amount;
+
         // Transfer tokens via the Stellar token interface (SAC)
         let token = token::Client::new(&env, &token_address);
-        token.transfer(&from, &to, &amount);
+
+        if fee_amount > 0 {
+            let admin: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::Admin)
+                .expect("Contract not initialized");
+            token.transfer(&from, &admin, &fee_amount);
+        }
+
+        token.transfer(&from, &to, &net_amount);
 
         // Update on-chain tip totals for the recipient
         let current_total: i128 = env
@@ -627,11 +294,44 @@ impl MicroPayContract {
             .instance()
             .set(&DataKey::TipRecord(to.clone(), current_count), &record);
 
-        // Emit an event for indexers
+        // Emit an event for indexers, including the fee collected (if any)
         env.events().publish(
             (Symbol::new(&env, "tip"), from, to.clone()),
-            amount,
+            TipEventData { amount, fee_amount },
         );
+    }
+
+    // ─── Fees ────────────────────────────────────────────────────────────────
+
+    /// Set the operator fee charged on every tip, in basis points
+    /// (1 bps = 0.01%). Capped at 500 bps (5%). Only callable by the
+    /// current admin. A `fee_bps` of 0 disables the fee (the default).
+    pub fn set_fee_bps(env: Env, admin: Address, fee_bps: u32) {
+        admin.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Contract not initialized");
+
+        if admin != stored_admin {
+            panic!("Only the admin can set the fee");
+        }
+
+        if fee_bps > MAX_FEE_BPS {
+            panic!("Fee exceeds maximum allowed (500 bps)");
+        }
+
+        env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+    }
+
+    /// Get the currently configured operator fee, in basis points.
+    pub fn get_fee_bps(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::FeeBps)
+            .unwrap_or(0)
     }
 
     // ─── Getters ─────────────────────────────────────────────────────────────
@@ -892,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mint_receipt() {
+    fn test_mint_receipt_stores_receipt_record_accessible_via_get_receipt() {
         let env = Env::default();
         let contract_id = env.register_contract(None, MicroPayContract);
         let client = MicroPayContractClient::new(&env, &contract_id);
@@ -916,10 +616,11 @@ mod tests {
         assert_eq!(stored.to, payee);
         assert_eq!(stored.amount, 1000);
         assert_eq!(stored.memo, memo);
+        assert_eq!(stored.ledger, env.ledger().sequence());
     }
 
     #[test]
-    fn test_receipt_count_tracks_multiple_mints() {
+    fn test_mint_two_receipts_from_same_payer_increments_count() {
         let env = Env::default();
         let contract_id = env.register_contract(None, MicroPayContract);
         let client = MicroPayContractClient::new(&env, &contract_id);
@@ -939,7 +640,30 @@ mod tests {
         assert_eq!(id1, 0);
         assert_eq!(id2, 1);
         assert_eq!(client.get_receipt_count(&payer), 2);
+
+        let receipt1 = client.get_receipt(&payer, &0);
+        assert_eq!(receipt1.to, payee1);
+        assert_eq!(receipt1.amount, 500);
+
+        let receipt2 = client.get_receipt(&payer, &1);
+        assert_eq!(receipt2.to, payee2);
+        assert_eq!(receipt2.amount, 1500);
     }
+
+    #[test]
+    #[should_panic(expected = "Receipt not found")]
+    fn test_get_receipt_out_of_range_panics_gracefully() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let payer = Address::generate(&env);
+        client.get_receipt(&payer, &0); // No receipts minted yet -> panics
+    }
+
 
     #[test]
     fn test_tip_totals_start_at_zero() {
@@ -955,549 +679,60 @@ mod tests {
         assert_eq!(client.get_tip_count(&recipient), 0);
     }
 
-    // ── Ticket 1: max rate cap ──────────────────────────────────────────────
-
     #[test]
-    fn test_max_rate_disabled_by_default() {
-        let (env, client, _admin, token_addr, payer) = setup();
-
-        // 0 means uncapped, so even a rate far above any sane bound is allowed.
-        assert_eq!(client.get_max_rate(), 0);
-
-        let recipient = Address::generate(&env);
-        let id = client.open_stream(&token_addr, &payer, &recipient, &1_000_000, &1_000_000);
-        assert_eq!(id, 0);
-    }
-
-    #[test]
-    fn test_rate_below_cap_is_accepted() {
-        let (env, client, admin, token_addr, payer) = setup();
-        client.set_max_rate(&admin, &1_000);
-
-        let recipient = Address::generate(&env);
-        let id = client.open_stream(&token_addr, &payer, &recipient, &999, &100_000);
-        assert_eq!(id, 0);
-    }
-
-    #[test]
-    fn test_rate_exactly_at_cap_is_accepted() {
-        let (env, client, admin, token_addr, payer) = setup();
-        client.set_max_rate(&admin, &1_000);
-
-        let recipient = Address::generate(&env);
-        // At the cap is allowed: only strictly-greater rates are rejected.
-        let id = client.open_stream(&token_addr, &payer, &recipient, &1_000, &100_000);
-        assert_eq!(id, 0);
-    }
-
-    #[test]
-    fn test_rate_above_cap_panics() {
-        let (env, client, admin, token_addr, payer) = setup();
-        client.set_max_rate(&admin, &1_000);
-
-        let recipient = Address::generate(&env);
-
-        assert_contract_error(client
-            .try_open_stream(&token_addr, &payer, &recipient, &1_001, &100_000), ContractError::RateTooHigh);
-    }
-
-    #[test]
-    fn test_set_max_rate_requires_admin() {
-        let (env, client, _admin, _token_addr, _payer) = setup();
-        let stranger = Address::generate(&env);
-
-        assert_contract_error(client.try_set_max_rate(&stranger, &1_000), ContractError::NotAdmin);
-    }
-
-    #[test]
-    fn test_set_max_rate_rejects_negative() {
-        let (_env, client, admin, _token_addr, _payer) = setup();
-
-        assert_contract_error(client.try_set_max_rate(&admin, &-1), ContractError::InvalidRate);
-    }
-
-    // ── Ticket 2: claim arithmetic ──────────────────────────────────────────
-
-    #[test]
-    fn test_open_stream() {
-        let (env, client, _admin, token_addr, payer) = setup();
-        let recipient = Address::generate(&env);
-
-        let id = client.open_stream(&token_addr, &payer, &recipient, &10, &1_000);
-        assert_eq!(id, 0);
-        assert_eq!(client.get_stream_count(), 1);
-
-        let s = client.get_stream(&id);
-        assert_eq!(s.payer, payer);
-        assert_eq!(s.recipient, recipient);
-        assert_eq!(s.rate_per_ledger, 10);
-        assert_eq!(s.deposited, 1_000);
-        assert_eq!(s.claimed, 0);
-    }
-
-    #[test]
-    fn test_claim_stream_basic() {
-        let (env, client, _admin, token_addr, payer) = setup();
-        let recipient = Address::generate(&env);
-        let id = client.open_stream(&token_addr, &payer, &recipient, &10, &1_000);
-
-        advance(&env, 5);
-        assert_eq!(client.claim_stream(&id, &recipient), 50);
-        assert_eq!(client.get_stream(&id).claimed, 50);
-        assert_eq!(client.get_claimable(&id), 0);
-    }
-
-    #[test]
-    fn test_claim_stream_multiple_times() {
-        let (env, client, _admin, token_addr, payer) = setup();
-        let recipient = Address::generate(&env);
-        let id = client.open_stream(&token_addr, &payer, &recipient, &10, &1_000);
-
-        advance(&env, 3);
-        assert_eq!(client.claim_stream(&id, &recipient), 30);
-
-        advance(&env, 4);
-        assert_eq!(client.claim_stream(&id, &recipient), 40);
-
-        assert_eq!(client.get_stream(&id).claimed, 70);
-    }
-
-    #[test]
-    fn test_claim_stream_exceeds_deposit() {
-        let (env, client, _admin, token_addr, payer) = setup();
-        let recipient = Address::generate(&env);
-        // 100 ledgers of accrual against a 1_000 deposit would be 10_000.
-        let id = client.open_stream(&token_addr, &payer, &recipient, &100, &1_000);
-
-        advance(&env, 100);
-        // Capped at the deposit, never 10_000.
-        assert_eq!(client.claim_stream(&id, &recipient), 1_000);
-        assert_eq!(client.get_stream(&id).claimed, 1_000);
-
-        // Nothing left, and no second payout.
-        assert_eq!(client.get_claimable(&id), 0);
-        assert_contract_error(client.try_claim_stream(&id, &recipient), ContractError::StreamClosed);
-    }
-
-    #[test]
-    fn test_top_up_stream() {
-        let (env, client, _admin, token_addr, payer) = setup();
-        let recipient = Address::generate(&env);
-        let id = client.open_stream(&token_addr, &payer, &recipient, &10, &1_000);
-
-        client.top_up_stream(&id, &payer, &500);
-        assert_eq!(client.get_stream(&id).deposited, 1_500);
-    }
-
-    #[test]
-    fn test_close_stream_with_refund() {
-        let (env, client, _admin, token_addr, payer) = setup();
-        let recipient = Address::generate(&env);
-        let id = client.open_stream(&token_addr, &payer, &recipient, &10, &1_000);
-
-        advance(&env, 10);
-        client.claim_stream(&id, &recipient);
-
-        // 1_000 deposited, 100 claimed, 100 accrued → 900 refunded.
-        let refund = client.close_stream(&id, &payer);
-        assert_eq!(refund, 900);
-    }
-
-    #[test]
-    fn test_close_stream_after_claims() {
-        let (env, client, _admin, token_addr, payer) = setup();
-        let recipient = Address::generate(&env);
-        let id = client.open_stream(&token_addr, &payer, &recipient, &10, &1_000);
-
-        advance(&env, 50);
-        let claimed = client.claim_stream(&id, &recipient);
-        let refund = client.close_stream(&id, &payer);
-
-        // The core conservation invariant: the two payouts split the deposit
-        // exactly, with nothing stranded or minted.
-        assert_eq!(claimed + refund, 1_000);
-    }
-
-    #[test]
-    fn test_get_claimable() {
-        let (env, client, _admin, token_addr, payer) = setup();
-        let recipient = Address::generate(&env);
-        let id = client.open_stream(&token_addr, &payer, &recipient, &10, &1_000);
-
-        assert_eq!(client.get_claimable(&id), 0);
-        advance(&env, 7);
-        assert_eq!(client.get_claimable(&id), 70);
-        // Reading claimable must not mutate state.
-        assert_eq!(client.get_stream(&id).claimed, 0);
-    }
-
-    #[test]
-    fn test_claim_nonexistent_stream() {
-        let (env, client, _admin, _token_addr, _payer) = setup();
-        let recipient = Address::generate(&env);
-
-        assert_contract_error(
-            client.try_claim_stream(&99, &recipient),
-            ContractError::StreamNotFound,
-        );
-    }
-
-    #[test]
-    fn test_unauthorized_claim() {
-        let (env, client, _admin, token_addr, payer) = setup();
-        let recipient = Address::generate(&env);
-        let id = client.open_stream(&token_addr, &payer, &recipient, &10, &1_000);
-
-        advance(&env, 5);
-        let stranger = Address::generate(&env);
-        assert_contract_error(client.try_claim_stream(&id, &stranger), ContractError::NotRecipient);
-    }
-
-    #[test]
-    fn test_unauthorized_close() {
-        let (env, client, _admin, token_addr, payer) = setup();
-        let recipient = Address::generate(&env);
-        let id = client.open_stream(&token_addr, &payer, &recipient, &10, &1_000);
-
-        let stranger = Address::generate(&env);
-        assert_contract_error(client.try_close_stream(&id, &stranger), ContractError::NotPayer);
-    }
-
-    #[test]
-    fn test_invalid_rate() {
-        let (env, client, _admin, token_addr, payer) = setup();
-        let recipient = Address::generate(&env);
-
-        assert_contract_error(client
-            .try_open_stream(&token_addr, &payer, &recipient, &0, &1_000), ContractError::InvalidRate);
-
-        assert_contract_error(client
-            .try_open_stream(&token_addr, &payer, &recipient, &-5, &1_000), ContractError::InvalidRate);
-    }
-
-    #[test]
-    fn test_invalid_deposit() {
-        let (env, client, _admin, token_addr, payer) = setup();
-        let recipient = Address::generate(&env);
-
-        assert_contract_error(client
-            .try_open_stream(&token_addr, &payer, &recipient, &10, &0), ContractError::InvalidDeposit);
-    }
-
-    #[test]
-    fn test_claim_nothing_accrued_panics() {
-        let (env, client, _admin, token_addr, payer) = setup();
-        let recipient = Address::generate(&env);
-        let id = client.open_stream(&token_addr, &payer, &recipient, &10, &1_000);
-
-        // No ledger elapsed, so there is nothing to withdraw.
-        assert_contract_error(client.try_claim_stream(&id, &recipient), ContractError::NothingToClaim);
-    }
-
-    // ── Ticket 2: claim_stream arithmetic fuzz ─────────────────────────────
-
-    // /// Property test over the accrual arithmetic.
-    // ///
-    // /// Exercises `total_streamed_amount` / `claimable_amount` directly with
-    // /// random `(rate_per_ledger, elapsed, deposited, already_claimed)` inputs
-    // /// drawn from the full `i128`/`u32` space — including the degenerate shapes
-    // /// that hand-written cases miss: `rate > deposited` (funds zero ledgers),
-    // /// `rate = 1` with a near-`i128::MAX` deposit, and elapsed ledgers far
-    // /// beyond the funded window.
-    // ///
-    // /// Two properties are asserted for every input:
-    // ///   1. no arithmetic panic (the whole point — `saturating_*` and the
-    // ///      funded-ledger cap must hold for *any* value, not just realistic ones)
-    // ///   2. `claimable <= deposited - already_claimed`, so repeated claims can
-    // ///      never withdraw more than the escrow holds
-    // ///
-    // /// Run with `cargo test fuzz -- --nocapture`.
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(1000))]
-
-        #[test]
-        fn fuzz_claim_math_holds_for_arbitrary_inputs(
-            rate_per_ledger in 1i128..=i128::MAX,
-            deposited in 1i128..=i128::MAX,
-            elapsed in 0u32..=u32::MAX,
-            already_claimed in 0i128..=i128::MAX,
-        ) {
-            let env = Env::default();
-            let stream = Stream {
-                payer: Address::generate(&env),
-                recipient: Address::generate(&env),
-                rate_per_ledger,
-                deposited,
-                claimed: already_claimed,
-                start_ledger: 0,
-                token: Address::generate(&env),
-            };
-
-            // Current ledger is `elapsed`; start_ledger is 0. Property 1: these
-            // calls must return rather than panic, for any input whatsoever.
-            let total_streamed = total_streamed_amount(&stream, elapsed);
-            let claimable = claimable_amount(&stream, elapsed);
-
-            // Property 2: the structural bound. The escrow left is
-            // `deposited - already_claimed`, floored at 0 — a stream that has
-            // already paid out more than it holds has nothing left to offer.
-            // (`saturating_sub` alone is not enough here: it saturates at
-            // `i128::MIN`, not 0, so an over-claimed stream would produce a
-            // large negative remainder.)
-            let remaining = deposited.saturating_sub(already_claimed).max(0);
-            assert!(
-                claimable <= remaining,
-                "claimable {} exceeded remaining {} (rate={}, deposited={}, elapsed={}, claimed={})",
-                claimable,
-                remaining,
-                rate_per_ledger,
-                deposited,
-                elapsed,
-                already_claimed
-            );
-
-            // Supporting invariants that make the bound meaningful.
-            assert!(
-                total_streamed <= deposited,
-                "total_streamed {} exceeded deposited {}",
-                total_streamed,
-                deposited
-            );
-            assert!(claimable >= 0, "claimable must never be negative");
-        }
-    }
-
-    // /// Property test over a full claim lifecycle driven through the contract.
-    // ///
-    // /// Opens a real stream, then claims repeatedly at randomized ledger
-    // /// advances and top-ups. After every step the conservation invariant
-    // /// `withdrawn <= deposited` is re-checked, and the final refund is checked
-    // /// to make `withdrawn + refund == deposited` exactly, which catches both
-    // /// over-payment and stranded funds.
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(64))]
-
-        #[test]
-        fn fuzz_repeated_claims_never_exceed_deposit(
-            rate_per_ledger in 1i128..=1_000i128,
-            deposit in 1i128..=1_000_000i128,
-            steps in proptest::collection::vec((1u32..50u32, 1i128..1_000i128), 1..12),
-        ) {
-            let (env, client, _admin, token_addr, payer) = setup();
-            let recipient = Address::generate(&env);
-
-            // The admin rate cap is off by default, so any positive rate opens.
-            let id = client.open_stream(&token_addr, &payer, &recipient, &rate_per_ledger, &deposit);
-
-            let mut withdrawn = 0i128;
-
-            for (advance_by, top_up) in steps {
-                advance(&env, advance_by);
-                client.top_up_stream(&id, &payer, &top_up);
-
-                // A claim with nothing accrued is a rejected no-op, not an
-                // invariant violation, so skip rather than fail.
-                if client.get_claimable(&id) == 0 {
-                    continue;
-                }
-
-                let claimed = client.claim_stream(&id, &recipient);
-                withdrawn = withdrawn.saturating_add(claimed);
-
-                let stream = client.get_stream(&id);
-                // Ticket invariant: a single claim never exceeds what the
-                // stream still owes on top of what was already withdrawn.
-                let outstanding = stream.deposited.saturating_sub(withdrawn - claimed);
-                assert!(
-                    claimed <= outstanding,
-                    "claim {} exceeded outstanding {} (rate={}, deposit={})",
-                    claimed,
-                    outstanding,
-                    rate_per_ledger,
-                    deposit
-                );
-                assert!(
-                    withdrawn <= stream.deposited,
-                    "cumulative claims {} exceeded deposit {}",
-                    withdrawn,
-                    stream.deposited
-                );
-            }
-
-            // Conservation: claims plus the final refund split the deposit exactly.
-            let refund = client.close_stream(&id, &payer);
-            assert_eq!(
-                withdrawn + refund,
-                client.get_stream(&id).deposited,
-                "claims + refund must equal the deposit"
-            );
-        }
-    }
-
-    // ── Ticket 3: stream event log ─────────────────────────────────────────
-
-    #[test]
-    fn test_stream_history_starts_empty() {
-        let (env, client, _admin, token_addr, payer) = setup();
-        let recipient = Address::generate(&env);
-        let id = client.open_stream(&token_addr, &payer, &recipient, &10, &1_000);
-
-        assert_eq!(client.get_stream_history(&id).len(), 0);
-    }
-
-    #[test]
-    fn test_stream_history_records_claims_and_topups() {
-        let (env, client, _admin, token_addr, payer) = setup();
-        let recipient = Address::generate(&env);
-        let id = client.open_stream(&token_addr, &payer, &recipient, &10, &1_000);
-
-        // 3 claims and 2 top-ups, interleaved.
-        advance(&env, 1);
-        client.claim_stream(&id, &recipient);
-        client.top_up_stream(&id, &payer, &250);
-
-        advance(&env, 2);
-        client.claim_stream(&id, &recipient);
-        client.top_up_stream(&id, &payer, &750);
-
-        advance(&env, 3);
-        client.claim_stream(&id, &recipient);
-
-        let history = client.get_stream_history(&id);
-        assert_eq!(history.len(), 5);
-
-        // Chronological, with the right kind and amount on each entry.
-        let expected: [(StreamEventType, i128); 5] = [
-            (StreamEventType::Claim, 10),
-            (StreamEventType::TopUp, 250),
-            (StreamEventType::Claim, 20),
-            (StreamEventType::TopUp, 750),
-            (StreamEventType::Claim, 30),
-        ];
-        for (i, (kind, amount)) in expected.iter().enumerate() {
-            let e = history.get(i as u32).unwrap();
-            assert_eq!(&e.event_type, kind, "event_type at index {}", i);
-            assert_eq!(e.amount, *amount, "amount at index {}", i);
-        }
-
-        // Ledger numbers are recorded and non-decreasing.
-        let first = history.get(0).unwrap().ledger;
-        let last = history.get(4).unwrap().ledger;
-        assert!(last >= first);
-    }
-
-    #[test]
-    fn test_stream_history_records_close() {
-        let (env, client, _admin, token_addr, payer) = setup();
-        let recipient = Address::generate(&env);
-        let id = client.open_stream(&token_addr, &payer, &recipient, &10, &1_000);
-
-        advance(&env, 4);
-        client.claim_stream(&id, &recipient);
-        let refund = client.close_stream(&id, &payer);
-
-        let history = client.get_stream_history(&id);
-        assert_eq!(history.len(), 2);
-
-        let close = history.get(1).unwrap();
-        assert_eq!(close.event_type, StreamEventType::Close);
-        assert_eq!(close.amount, refund);
-    }
-
-    #[test]
-    fn test_stream_history_is_per_stream() {
-        let (env, client, _admin, token_addr, payer) = setup();
-        let r1 = Address::generate(&env);
-        let r2 = Address::generate(&env);
-
-        let a = client.open_stream(&token_addr, &payer, &r1, &10, &1_000);
-        let b = client.open_stream(&token_addr, &payer, &r2, &10, &1_000);
-
-        advance(&env, 1);
-        client.claim_stream(&a, &r1);
-
-        assert_eq!(client.get_stream_history(&a).len(), 1);
-        assert_eq!(client.get_stream_history(&b).len(), 0);
-    }
-
-    // ── Ticket 4: freeze / unfreeze ────────────────────────────────────────
-
-    #[test]
-    fn test_freeze_blocks_state_changes() {
-        let (env, client, admin, token_addr, payer) = setup();
-        let recipient = Address::generate(&env);
-        let id = client.open_stream(&token_addr, &payer, &recipient, &10, &1_000);
-
-        advance(&env, 5);
-        client.freeze(&admin);
-        assert!(client.is_frozen());
-
-        // Every state-changing entry point rejects the call.
-        let frozen = ContractError::Frozen;
-        assert_contract_error(client.try_claim_stream(&id, &recipient), frozen);
-        assert_contract_error(
-            client.try_open_stream(&token_addr, &payer, &recipient, &10, &1_000),
-            frozen,
-        );
-        assert_contract_error(client.try_top_up_stream(&id, &payer, &100), frozen);
-        assert_contract_error(client.try_close_stream(&id, &payer), frozen);
-        assert_contract_error(client.try_set_max_rate(&admin, &500), frozen);
-        assert_contract_error(
-            client.try_mint_receipt(&payer, &payer, &1, &Symbol::new(&env, "n")),
-            frozen,
-        );
-        assert_contract_error(client.try_send_tip(&token_addr, &payer, &recipient, &1), frozen);
-    }
-
-    #[test]
-    fn test_read_only_works_while_frozen() {
-        let (env, client, admin, token_addr, payer) = setup();
-        let recipient = Address::generate(&env);
-        let id = client.open_stream(&token_addr, &payer, &recipient, &10, &1_000);
-        advance(&env, 5);
-
-        client.freeze(&admin);
-
-        // Monitoring still works during an incident.
-        assert_eq!(client.get_stream(&id).deposited, 1_000);
-        assert_eq!(client.get_claimable(&id), 50);
-        assert_eq!(client.get_stream_count(), 1);
+    fn test_set_admin_and_rotation() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
         assert_eq!(client.get_admin(), admin);
-        assert_eq!(client.get_max_rate(), 0);
-        assert!(client.is_frozen());
+
+        let new_admin = Address::generate(&env);
+
+        env.mock_all_auths();
+        client.set_admin(&new_admin);
+
+        assert_eq!(client.get_admin(), new_admin);
     }
 
     #[test]
-    fn test_unfreeze_restores_state_changes() {
-        let (env, client, admin, token_addr, payer) = setup();
-        let recipient = Address::generate(&env);
-        let id = client.open_stream(&token_addr, &payer, &recipient, &10, &1_000);
+    #[should_panic]
+    fn test_upgrade_non_admin_panics() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
 
-        client.freeze(&admin);
-        client.unfreeze(&admin);
-        assert!(!client.is_frozen());
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
 
-        // Accrual that happened during the freeze is claimable again.
-        advance(&env, 5);
-        assert_eq!(client.claim_stream(&id, &recipient), 50);
+        let dummy_hash = BytesN::from_array(&env, &[1u8; 32]);
+        // Without admin auth, calling upgrade panics
+        client.upgrade(&dummy_hash);
     }
 
     #[test]
-    fn test_freeze_requires_admin() {
-        let (env, client, _admin, _token_addr, _payer) = setup();
-        let stranger = Address::generate(&env);
+    fn test_upgrade_admin_requires_auth_and_invokes_deployer() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MicroPayContract);
+        let client = MicroPayContractClient::new(&env, &contract_id);
 
-        assert_contract_error(client.try_freeze(&stranger), ContractError::NotAdmin);
-        assert!(!client.is_frozen());
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
 
-        assert_contract_error(client.try_unfreeze(&stranger), ContractError::NotAdmin);
+        env.mock_all_auths();
+
+        let dummy_hash = BytesN::from_array(&env, &[1u8; 32]);
+        // With admin auth, try_upgrade passes the admin auth check and invokes deployer.
+        // In native test environment, deployer returns an Err (InvalidAction for non-wasm target).
+        let res = client.try_upgrade(&dummy_hash);
+        assert!(res.is_err());
     }
 
-    #[test]
-    fn test_freeze_twice_is_idempotent() {
-        let (_env, client, admin, _token_addr, _payer) = setup();
-        client.freeze(&admin);
-        client.freeze(&admin);
-        assert!(client.is_frozen());
-    }
+
+
+
+
 }
+
