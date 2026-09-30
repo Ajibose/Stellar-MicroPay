@@ -1,78 +1,64 @@
 /**
  * utils/format.ts
  * Shared formatting utilities.
+ * 
+ * MIGRATION NOTE: This file now uses Intl-based formatters from intlFormatters.ts
+ * for better internationalization support. The API remains backward compatible.
  */
 
 import { PaymentRecord } from "@/lib/stellar";
-import { formatDistanceToNow, format } from "date-fns";
+import { format } from "date-fns";
+import {
+  formatAsset as formatAssetIntl,
+  formatAssetPrecise as formatAssetPreciseIntl,
+  formatStroopsToXLM as formatStroopsToXLMIntl,
+  formatUSD as formatUSDIntl,
+  formatRelativeTime,
+  formatDate as formatDateIntl,
+  shortenAddress as shortenAddressIntl,
+  getUserLocale,
+} from "./intlFormatters";
 
-interface AssetFormatRule {
-  minimumFractionDigits: number;
-  maximumFractionDigits: number;
-}
-
-const DEFAULT_ASSET_CODE = "XLM";
-const DEFAULT_ASSET_RULE: AssetFormatRule = {
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 7,
-};
-const ASSET_FORMAT_RULES: Record<string, AssetFormatRule> = {
-  XLM: DEFAULT_ASSET_RULE,
-  USDC: {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  },
-};
-
-function normalizeAssetCode(assetCode?: string): string {
-  return assetCode?.trim().toUpperCase() || DEFAULT_ASSET_CODE;
-}
-
-function getAssetFormatRule(assetCode?: string): AssetFormatRule {
-  return ASSET_FORMAT_RULES[normalizeAssetCode(assetCode)] ?? DEFAULT_ASSET_RULE;
-}
+// Re-export from intlFormatters for better tree-shaking
+export {
+  formatNumber,
+  formatSmallAmount,
+  formatForScreenReader,
+  validateDate,
+  validateAmount,
+  getUserTimezone,
+  pluralize as pluralizeIntl, // Rename to avoid conflicts
+  formatDateFull,
+} from "./intlFormatters";
 
 /**
  * Shorten a Stellar address for display (e.g. GABC...XYZ1)
  */
 export function shortenAddress(address: string, chars = 4): string {
-  if (!address || address.length < chars * 2 + 2) return address;
-  return `${address.slice(0, chars)}...${address.slice(-chars)}`;
+  return shortenAddressIntl(address, chars);
 }
 
 /**
  * Format XLM amount with up to 7 decimal places, trimming trailing zeros.
  * @param amount - The amount to format
- * @param locale - The locale for formatting (defaults to 'en-US')
+ * @param locale - The locale for formatting (defaults to user's locale)
  */
-export function formatXLM(amount: string | number, locale = 'en-US'): string {
-  return formatAsset(amount, "XLM", locale);
+export function formatXLM(amount: string | number, locale?: string): string {
+  return formatAssetIntl(amount, "XLM", { locale: locale ?? getUserLocale() });
 }
 
 /**
  * Format a Stellar asset amount with asset-specific precision rules.
  * @param amount - The amount to format
  * @param assetCode - The asset code (e.g., 'XLM', 'USDC')
- * @param locale - The locale for formatting (defaults to 'en-US')
+ * @param locale - The locale for formatting (defaults to user's locale)
  */
 export function formatAsset(
   amount: string | number,
-  assetCode = DEFAULT_ASSET_CODE,
-  locale = 'en-US'
+  assetCode = "XLM",
+  locale?: string
 ): string {
-  const normalizedAssetCode = normalizeAssetCode(assetCode);
-  const rule = getAssetFormatRule(normalizedAssetCode);
-  const num = typeof amount === "string" ? parseFloat(amount) : amount;
-
-  if (amount == null || Number.isNaN(num)) {
-    const zeroValue =
-      rule.minimumFractionDigits > 0
-        ? (0).toFixed(rule.minimumFractionDigits)
-        : "0";
-    return `${zeroValue} ${normalizedAssetCode}`;
-  }
-
-  return `${num.toLocaleString(locale, rule)} ${normalizedAssetCode}`;
+  return formatAssetIntl(amount, assetCode, { locale: locale ?? getUserLocale() });
 }
 
 /**
@@ -86,14 +72,9 @@ export function formatAsset(
  */
 export function formatAssetPrecise(
   amount: string | number,
-  assetCode = DEFAULT_ASSET_CODE
+  assetCode = "XLM"
 ): string {
-  const normalizedAssetCode = normalizeAssetCode(assetCode);
-  const rule = getAssetFormatRule(normalizedAssetCode);
-  const num = typeof amount === "string" ? parseFloat(amount) : amount;
-  const safeNum = amount == null || Number.isNaN(num) ? 0 : num;
-
-  return `${safeNum.toFixed(rule.maximumFractionDigits)} ${normalizedAssetCode}`;
+  return formatAssetPreciseIntl(amount, assetCode, { locale: getUserLocale() });
 }
 
 /**
@@ -101,7 +82,7 @@ export function formatAssetPrecise(
  * @param amount - The amount to format
  */
 export function formatXLMPrecise(amount: string | number): string {
-  return formatAssetPrecise(amount, "XLM");
+  return formatAssetPreciseIntl(amount, "XLM", { locale: getUserLocale() });
 }
 
 /**
@@ -109,37 +90,23 @@ export function formatXLMPrecise(amount: string | number): string {
  * @param stroops - The amount in stroops (i128 from Soroban).
  */
 export function formatStroopsToXLM(stroops: bigint | string | number): string {
-  try {
-    if (stroops === null || stroops === undefined) return "0.0000000 XLM";
-    const s = typeof stroops === "bigint" ? stroops : BigInt(stroops);
-    const xlm = Number(s) / 10_000_000;
-    return `${xlm.toFixed(7)} XLM`;
-  } catch (err) {
-    return "0.0000000 XLM";
-  }
+  return formatStroopsToXLMIntl(stroops, { locale: getUserLocale() });
 }
 
 /**
  * Format a date string as relative time (e.g., "3 minutes ago").
  */
 export function timeAgo(dateString: string): string {
-  try {
-    return formatDistanceToNow(new Date(dateString), { addSuffix: true });
-  } catch {
-    return dateString;
-  }
+  return formatRelativeTime(dateString, { locale: getUserLocale() });
 }
 
 /**
  * Format a date string in a human-readable format.
  */
 export function formatDate(dateString: string): string {
-  try {
-    return format(new Date(dateString), "MMM d, yyyy · HH:mm");
-  } catch {
-    return dateString;
-  }
+  return formatDateIntl(dateString, { locale: getUserLocale() });
 }
+
 
 /**
  * Copy text to clipboard and return success boolean.
@@ -362,6 +329,15 @@ export function formatUSD(usdValue: number, locale = 'en-US'): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })} USD`;
+}
+
+/**
+ * Format a USD value with 2 decimal places (e.g. "≈ $142.50 USD").
+ * @param usdValue - The USD value to format
+ * @param locale - The locale for formatting (defaults to user's locale)
+ */
+export function formatUSD(usdValue: number, locale?: string): string {
+  return formatUSDIntl(usdValue, { locale: locale ?? getUserLocale() });
 }
 
 /**
