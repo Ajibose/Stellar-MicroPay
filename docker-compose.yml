@@ -34,7 +34,15 @@ services:
       # Preserve container's node_modules
       - /app/node_modules
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health"]
+      # Probe with node rather than wget: the image always ships node, and
+      # 127.0.0.1 avoids busybox resolving "localhost" to ::1 first.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:4000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -85,7 +93,13 @@ services:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3000',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))",
+        ]
       interval: 15s
       timeout: 5s
       retries: 5
