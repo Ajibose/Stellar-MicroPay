@@ -9,6 +9,7 @@
 
 const cache = require("./cache");
 const stellarService = require("./stellarService");
+const logger = require("../utils/logger");
 
 // ─── Cache Configuration ──────────────────────────────────────────────────────
 //
@@ -582,4 +583,65 @@ module.exports = {
   triggerEmailExport,
   withCache,
   cache,
+  stopCacheSweep,
+  getCachedAnalytics,
+  setCachedAnalytics,
+  clearAnalyticsCache,
 };
+
+
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const SWEEP_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+
+// Map structure: key -> { data, timestamp }
+const analyticsCache = new Map();
+
+function sweepCache() {
+  const now = Date.now();
+  let evictedCount = 0;
+
+  for (const [key, entry] of analyticsCache.entries()) {
+    if (now - entry.timestamp > CACHE_TTL_MS) {
+      analyticsCache.delete(key);
+      evictedCount++;
+    }
+  }
+
+  logger.info(`Cache sweep: evicted ${evictedCount} entries`);
+  return evictedCount;
+}
+
+// Start periodic sweep interval
+const sweepIntervalId = setInterval(sweepCache, SWEEP_INTERVAL_MS);
+
+// Allow interval to unref so it doesn't block process exit if needed, and export stopper
+if (sweepIntervalId.unref) {
+  sweepIntervalId.unref();
+}
+
+function stopCacheSweep() {
+  clearInterval(sweepIntervalId);
+}
+
+function getCachedAnalytics(publicKey) {
+  const entry = analyticsCache.get(publicKey);
+  if (!entry) return null;
+
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+    analyticsCache.delete(publicKey);
+    return null;
+  }
+
+  return entry.data;
+}
+
+function setCachedAnalytics(publicKey, data) {
+  analyticsCache.set(publicKey, {
+    data,
+    timestamp: Date.now(),
+  });
+}
+
+function clearAnalyticsCache() {
+  analyticsCache.clear();
+}
