@@ -75,18 +75,15 @@ jobs:
         with:
           targets: wasm32v1-none
       - uses: Swatinem/rust-cache@v2
-      # soroban-sdk 28 refuses plain `cargo build --target wasm32v1-none`
-      # unless the build system performs spec shaking (stellar-cli >= 25.2
-      # sets SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2), so the wasm
-      # artifact must be produced with `stellar contract build`.
-      - name: Install Stellar CLI
+      - name: Install stellar-cli (required by soroban-sdk v28 build script)
         run: |
-          curl --proto '=https' --tlsv1.2 -sSfL \
-            https://github.com/stellar/stellar-cli/releases/download/v28.1.0/stellar-cli-28.1.0-x86_64-unknown-linux-gnu.tar.gz \
-            | tar -xz
-          sudo install -m 0755 stellar /usr/local/bin/stellar
+          if ! command -v stellar >/dev/null 2>&1; then
+            curl -sSfL -o /tmp/stellar-cli.tar.gz https://github.com/stellar/stellar-cli/releases/download/v25.2.0/stellar-cli-25.2.0-x86_64-unknown-linux-gnu.tar.gz
+            mkdir -p /tmp/stellar-cli && tar -xzf /tmp/stellar-cli.tar.gz -C /tmp/stellar-cli
+            sudo install -m 755 /tmp/stellar-cli/stellar /usr/local/bin/stellar
+          fi
           stellar --version
-      - run: cargo check
+      - run: cargo check --target wasm32v1-none
       - run: cargo test
       - name: Build WASM
         run: stellar contract build --profile release
@@ -118,3 +115,29 @@ jobs:
           name: playwright-report
           path: frontend/playwright-report/
           if-no-files-found: warn
+
+  health-smoke:
+    name: Docker Compose health smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start stack with docker compose
+        run: docker compose up -d --build
+      - name: Wait for backend healthcheck
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:4000/health >/dev/null; then
+              echo "Backend healthy"
+              exit 0
+            fi
+            echo "Waiting for backend... ($i/30)"
+            sleep 2
+          done
+          echo "Backend did not become healthy in time"
+          docker compose logs
+          exit 1
+      - name: Run /health smoke test
+        run: SMOKE_HEALTH_ONLY=1 HEALTH_URL=http://localhost:4000 node scripts/smoke-test.js
+      - name: Tear down stack
+        if: always()
+        run: docker compose down -v
