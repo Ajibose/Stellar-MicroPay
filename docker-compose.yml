@@ -112,8 +112,10 @@ networks:
   frontend:
     driver: bridge
   backend:
+    # Not `internal: true` — the API dials Horizon/Soroban RPC on startup and an
+    # internal-only network leaves it with no default route, so it never binds
+    # /health and the container stays unhealthy for the whole start_period.
     driver: bridge
-    internal: true
 
 volumes:
   redis_data:
