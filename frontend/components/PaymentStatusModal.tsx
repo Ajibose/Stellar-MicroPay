@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Modal from "@/components/Modal";
 
 export type PaymentStepId = "building" | "signing" | "submitting" | "confirming";
 export type PaymentFlowStatus =
@@ -63,6 +62,20 @@ export default function PaymentStatusModal({
     return () => window.clearInterval(interval);
   }, [isOpen]);
 
+  useEffect(() => {
+    if (!isOpen || !isTerminal) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isOpen, isTerminal, onClose]);
+
   const progress = useMemo(() => {
     const completedCount = STEP_ORDER.filter(
       ({ id }) => stepTimings[id].completedAt !== null
@@ -79,146 +92,145 @@ export default function PaymentStatusModal({
     );
   }, [status, stepTimings]);
 
+  if (!isOpen) return null;
+
   return (
-    <Modal
-      isOpen={isOpen}
-      onClose={onClose}
-      // The payment flow is not interruptible until it reaches a terminal
-      // state, so the backdrop never closes it and Escape only works at the end.
-      closeOnBackdropClick={false}
-      closeOnEscape={isTerminal}
-      labelledBy="payment-status-title"
-      overlayClassName="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
-      panelClassName="w-full max-w-xl overflow-hidden rounded-3xl border border-white/10 bg-slate-900/95 shadow-2xl outline-none"
-    >
-      <div className="border-b border-white/10 px-6 py-5">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-stellar-300/80">
-              Payment Tracker
-            </p>
-            <h3
-              id="payment-status-title"
-              className="mt-2 font-display text-xl font-semibold text-white"
-            >
-              {status === "success"
-                ? "Complete"
-                : status === "error"
-                  ? "Payment failed"
-                  : "Processing payment"}
-            </h3>
-            <p className="mt-1 text-sm text-slate-400">
-              {status === "success"
-                ? "Your transaction has been confirmed on the Stellar network."
-                : status === "error"
-                  ? "The transaction stopped before completion."
-                  : "Stay on this screen while we move through each network step."}
-            </p>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="payment-status-title"
+        className="w-full max-w-xl overflow-hidden rounded-3xl border border-white/10 bg-slate-900/95 shadow-2xl"
+      >
+        <div className="border-b border-white/10 px-6 py-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-stellar-300/80">
+                Payment Tracker
+              </p>
+              <h3
+                id="payment-status-title"
+                className="mt-2 font-display text-xl font-semibold text-white"
+              >
+                {status === "success"
+                  ? "Complete"
+                  : status === "error"
+                    ? "Payment failed"
+                    : "Processing payment"}
+              </h3>
+              <p className="mt-1 text-sm text-slate-400">
+                {status === "success"
+                  ? "Your transaction has been confirmed on the Stellar network."
+                  : status === "error"
+                    ? "The transaction stopped before completion."
+                    : "Stay on this screen while we move through each network step."}
+              </p>
+            </div>
+
+            {isTerminal && (
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-lg border border-white/10 px-3 py-1.5 text-sm font-medium text-slate-300 transition-colors hover:border-white/20 hover:text-white"
+              >
+                Close
+              </button>
+            )}
           </div>
 
-          {isTerminal && (
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-lg border border-white/10 px-3 py-1.5 text-sm font-medium text-slate-300 transition-colors hover:border-white/20 hover:text-white"
-            >
-              Close
-            </button>
+          <div className="mt-5">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span>Progress</span>
+              <span>{Math.round(progress)}%</span>
+            </div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/5">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-stellar-500 via-cyan-400 to-emerald-400 transition-all duration-500"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          </div>
+
+          {!isTerminal && (
+            <CountdownTimer
+              startedAt={stepTimings.building.startedAt}
+              timeoutSeconds={timeoutSeconds}
+              now={now}
+            />
           )}
         </div>
 
-        <div className="mt-5">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>Progress</span>
-            <span>{Math.round(progress)}%</span>
-          </div>
-          <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/5">
-            <div
-              className="h-full rounded-full bg-gradient-to-r from-stellar-500 via-cyan-400 to-emerald-400 transition-all duration-500"
-              style={{ width: `${progress}%` }}
-            />
-          </div>
-        </div>
+        <div className="space-y-4 px-6 py-5">
+          {STEP_ORDER.map(({ id, label }, index) => {
+            const timing = stepTimings[id];
+            const stepState = getStepState({
+              id,
+              status,
+              failedStep,
+              timing,
+            });
 
-        {!isTerminal && (
-          <CountdownTimer
-            startedAt={stepTimings.building.startedAt}
-            timeoutSeconds={timeoutSeconds}
-            now={now}
-          />
-        )}
-      </div>
+            return (
+              <div key={id} className="relative">
+                {index < STEP_ORDER.length - 1 && (
+                  <div className="absolute left-[1.1rem] top-11 h-[calc(100%-1.25rem)] w-px bg-white/10" />
+                )}
 
-      <div className="space-y-4 px-6 py-5">
-        {STEP_ORDER.map(({ id, label }, index) => {
-          const timing = stepTimings[id];
-          const stepState = getStepState({
-            id,
-            status,
-            failedStep,
-            timing,
-          });
-
-          return (
-            <div key={id} className="relative">
-              {index < STEP_ORDER.length - 1 && (
-                <div className="absolute left-[1.1rem] top-11 h-[calc(100%-1.25rem)] w-px bg-white/10" />
-              )}
-
-              <div className="flex items-start gap-4 rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-4">
-                <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-slate-950/60 text-slate-200">
-                  <StepIcon id={id} state={stepState} />
-                </div>
-
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-semibold text-white">{label}</p>
-                      <p className="text-xs text-slate-400">
-                        {getStepCaption(stepState)}
-                      </p>
-                    </div>
-                    <span className="text-xs font-medium text-slate-400">
-                      {formatElapsed(timing, now)}
-                    </span>
+                <div className="flex items-start gap-4 rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-4">
+                  <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-slate-950/60 text-slate-200">
+                    <StepIcon id={id} state={stepState} />
                   </div>
 
-                  {stepState === "failed" && timing.error && (
-                    <p className="mt-3 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-                      {timing.error}
-                    </p>
-                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold text-white">{label}</p>
+                        <p className="text-xs text-slate-400">
+                          {getStepCaption(stepState)}
+                        </p>
+                      </div>
+                      <span className="text-xs font-medium text-slate-400">
+                        {formatElapsed(timing, now)}
+                      </span>
+                    </div>
+
+                    {stepState === "failed" && timing.error && (
+                      <p className="mt-3 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+                        {timing.error}
+                      </p>
+                    )}
+                  </div>
                 </div>
               </div>
+            );
+          })}
+
+          {status === "success" && (
+            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+              <p className="font-medium">Transaction confirmed</p>
+              {txHash && <p className="mt-1 break-all text-emerald-100/90">{txHash}</p>}
+              {explorerHref && txHash && (
+                <a
+                  href={explorerHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-emerald-100 transition-colors hover:text-white"
+                >
+                  View on Stellar Expert
+                  <ExternalLinkIcon className="h-4 w-4" />
+                </a>
+              )}
             </div>
-          );
-        })}
+          )}
 
-        {status === "success" && (
-          <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
-            <p className="font-medium">Transaction confirmed</p>
-            {txHash && <p className="mt-1 break-all text-emerald-100/90">{txHash}</p>}
-            {explorerHref && txHash && (
-              <a
-                href={explorerHref}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-emerald-100 transition-colors hover:text-white"
-              >
-                View on Stellar Expert
-                <ExternalLinkIcon className="h-4 w-4" />
-              </a>
-            )}
-          </div>
-        )}
-
-        {status === "error" && error && !stepTimings[failedStep ?? "building"].error && (
-          <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-            {error}
-          </div>
-        )}
+          {status === "error" && error && !stepTimings[failedStep ?? "building"].error && (
+            <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+              {error}
+            </div>
+          )}
+        </div>
       </div>
-    </Modal>
+    </div>
   );
 }
 
@@ -337,7 +349,6 @@ function StepIcon({
   if (id === "submitting") return <UploadIcon className="h-4 w-4 text-slate-300" />;
   return <SparklesIcon className="h-4 w-4 text-slate-300" />;
 }
-
 
 function CheckIcon({ className }: { className?: string }) {
   return (

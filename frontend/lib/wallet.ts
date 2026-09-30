@@ -11,38 +11,61 @@
 
 import {
   isConnected,
-  getAddress,
+  getPublicKey,
   signTransaction,
   requestAccess,
   isAllowed,
 } from "@stellar/freighter-api";
 
-import { apiFetch } from "./api";
-import { getNetworkPassphrase } from "./stellar";
+import { getNetworkPassphrase, getNetworkConfig } from "./stellar";
+import {
+  getJwtToken as getSessionJwtToken,
+  setJwtToken as setSessionJwtToken,
+  clearJwtToken,
+} from "./auth";
 
 // ─── SEP-0010 helpers ────────────────────────────────────────────────────────
 
-let jwtToken: string | null = null;
-/** Store the SEP-0010 JWT token in memory for the current session. */
-export function setJwtToken(token: string | null) { jwtToken = token; }
-/** Returns the SEP-0010 JWT token currently held in memory, or null if not authenticated. */
-export function getJwtToken() { return jwtToken; }
+/**
+ * Persist JWT in sessionStorage (via auth.ts). Never use localStorage for tokens.
+ * The backend also sets an httpOnly `jwt` cookie on SEP-0010 verify.
+ */
+export function setJwtToken(token: string | null) {
+  if (token) {
+    setSessionJwtToken(token);
+  } else {
+    clearJwtToken();
+  }
+}
+
+export function getJwtToken() {
+  return getSessionJwtToken();
+}
 
 async function fetchAuthChallenge(publicKey: string): Promise<string> {
-  const data = await apiFetch<{ transaction: string }>(
-    `/api/auth?account=${encodeURIComponent(publicKey)}`,
-    { credentials: "include", raw: true },
-  );
-  return data.transaction;
+  const base = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "";
+  const res  = await fetch(`${base}/api/auth?account=${encodeURIComponent(publicKey)}`, {
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error("Failed to fetch SEP-0010 challenge");
+  const { transaction } = await res.json();
+  return transaction;
 }
 
 async function verifyAuthChallenge(signedXDR: string): Promise<string> {
-  const data = await apiFetch<{ token: string }>("/api/auth", {
+  const base = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "";
+  const res  = await fetch(`${base}/api/auth`, {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
     credentials: "include",
     body: JSON.stringify({ transaction: signedXDR }),
   });
-  return data.token;
+  if (!res.ok) {
+    const { error } = await res.json().catch(() => ({ error: "Auth failed" }));
+    throw new Error(error || "SEP-0010 verification failed");
+  }
+  const { token } = await res.json();
+  return token;
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -81,13 +104,15 @@ export const EXTENSION_URLS: Record<SupportedBrowser, string> = {
 
 /**
  * Check whether the Freighter extension is installed in the browser.
- * Returns false during SSR where `window` is undefined (#198).
  */
 export async function isFreighterInstalled(): Promise<boolean> {
-  if (typeof window === "undefined") return false;
   try {
     const result = await isConnected();
-    return Boolean(result.isConnected);
+    // isConnected returns { isConnected: boolean } or boolean depending on version
+    if (typeof result === "object" && result !== null && "isConnected" in result) {
+      return (result as { isConnected: boolean }).isConnected;
+    }
+    return Boolean(result);
   } catch {
     return false;
   }
@@ -95,13 +120,14 @@ export async function isFreighterInstalled(): Promise<boolean> {
 
 /**
  * Check if this site has already been granted access by the user.
- * Returns false during SSR where `window` is undefined (#198).
  */
 export async function hasSiteAccess(): Promise<boolean> {
-  if (typeof window === "undefined") return false;
   try {
     const result = await isAllowed();
-    return Boolean(result.isAllowed);
+    if (typeof result === "object" && result !== null && "isAllowed" in result) {
+      return (result as { isAllowed: boolean }).isAllowed;
+    }
+    return Boolean(result);
   } catch {
     return false;
   }
@@ -129,18 +155,14 @@ export async function connectWallet(): Promise<{
 
   try {
     // 2. Request access from the user
-    const access = await requestAccess();
-
-    // #199: check error field — denial does not throw, it returns {error}
-    if (access.error) {
-      return {
-        publicKey: null,
-        error: access.error.message || "Connection rejected. Please approve the connection in Freighter.",
-      };
-    }
+    await requestAccess();
 
     // 3. Get the public key
-    const publicKey = access.address || (await getAddress()).address;
+    const result = await getPublicKey();
+    const publicKey =
+      typeof result === "object" && result !== null && "publicKey" in result
+        ? (result as { publicKey: string }).publicKey
+        : (result as string);
 
     if (!publicKey) {
       return { publicKey: null, error: "No public key returned from Freighter." };
@@ -170,8 +192,12 @@ export async function getConnectedPublicKey(): Promise<string | null> {
     const allowed = await hasSiteAccess();
     if (!allowed) return null;
 
-    const { address } = await getAddress();
-    return address || null;
+    const result = await getPublicKey();
+    const pk =
+      typeof result === "object" && result !== null && "publicKey" in result
+        ? (result as { publicKey: string }).publicKey
+        : (result as string);
+    return pk || null;
   } catch {
     return null;
   }
@@ -206,25 +232,37 @@ export async function performSEP0010Auth(
 // ─── Signing ─────────────────────────────────────────────────────────────────
 
 /**
+ * Wallet type for signing strategy.
+ */
+export type WalletType = "freighter" | "ledger";
+
+/**
  * Ask Freighter to sign a transaction XDR.
  * Returns the signed XDR string.
  */
 export async function signTransactionWithWallet(
-  transactionXDR: string
+  transactionXDR: string,
+  walletType: WalletType = "freighter"
 ): Promise<{ signedXDR: string | null; error: string | null }> {
-  if (typeof window === "undefined") {
-    return { signedXDR: null, error: "Wallet signing is not available during server-side rendering." };
+  if (walletType === "ledger") {
+    return signTransactionWithLedger(transactionXDR);
   }
+
   try {
-    const signed = await signTransaction(transactionXDR, {
+    const config = getNetworkConfig();
+    const network = config.network === "mainnet" ? "MAINNET" : "TESTNET";
+
+    const result = await signTransaction(transactionXDR, {
       networkPassphrase: getNetworkPassphrase(),
+      network,
     });
 
-    if (signed.error) {
-      throw new Error(signed.error.message || "Freighter signing failed");
-    }
+    const signedXDR =
+      typeof result === "object" && result !== null && "signedTransaction" in result
+        ? (result as { signedTransaction: string }).signedTransaction
+        : (result as string);
 
-    return { signedXDR: signed.signedTxXdr, error: null };
+    return { signedXDR, error: null };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
 
@@ -250,21 +288,118 @@ export function disconnectWallet(): void {
   setJwtToken(null);
 }
 
-/**
- * Placeholder for Ledger support (not implemented in this version).
- */
-export const isLedgerSupported = async () => false;
+// ─── Ledger Hardware Wallet Support ─────────────────────────────────────────────
+
+let ledgerTransport: any = null;
+let ledgerApp: any = null;
 
 /**
- * Placeholder for Ledger signing.
+ * Check if Ledger hardware wallet is supported (WebUSB available).
  */
-export async function signTransactionWithLedger(xdr: string): Promise<{ signedXDR: string | null; error: string | null }> {
-  return { signedXDR: null, error: "Ledger support not implemented." };
+export const isLedgerSupported = async (): Promise<boolean> => {
+  if (typeof window === "undefined") return false;
+  if (!navigator || !(navigator as any).usb) return false;
+  
+  try {
+    // Dynamic import to avoid SSR issues
+    const TransportWebUSB = (await import("@ledgerhq/hw-transport-webusb")).default;
+    return TransportWebUSB.isSupported();
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Get public key from Ledger device.
+ */
+export async function getLedgerPublicKey(): Promise<{ publicKey: string | null; error: string | null }> {
+  try {
+    const TransportWebUSB = (await import("@ledgerhq/hw-transport-webusb")).default;
+    const AppStellar = (await import("@ledgerhq/hw-app-str")).default;
+    
+    ledgerTransport = await TransportWebUSB.create();
+    ledgerApp = new AppStellar(ledgerTransport);
+    
+    const result = await ledgerApp.getPublicKey("", "44'", true);
+    const publicKey = result.publicKey;
+    
+    await ledgerTransport.close();
+    ledgerTransport = null;
+    ledgerApp = null;
+    
+    return { publicKey, error: null };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    
+    if (ledgerTransport) {
+      try {
+        await ledgerTransport.close();
+      } catch {
+        // Ignore close errors
+      }
+      ledgerTransport = null;
+      ledgerApp = null;
+    }
+    
+    if (message.includes("No device found")) {
+      return { publicKey: null, error: "Ledger device not found. Please connect your Ledger and unlock it." };
+    }
+    if (message.includes("Locked")) {
+      return { publicKey: null, error: "Ledger device is locked. Please unlock it." };
+    }
+    if (message.includes("Stellar app is not open")) {
+      return { publicKey: null, error: "Please open the Stellar app on your Ledger device." };
+    }
+    
+    return { publicKey: null, error: `Ledger error: ${message}` };
+  }
 }
 
 /**
- * Placeholder for fetching Ledger public key.
+ * Sign transaction with Ledger device.
  */
-export async function getLedgerPublicKey(): Promise<{ publicKey: string | null; error: string | null }> {
-  return { publicKey: null, error: "Ledger support not implemented." };
+export async function signTransactionWithLedger(xdr: string): Promise<{ signedXDR: string | null; error: string | null }> {
+  try {
+    const TransportWebUSB = (await import("@ledgerhq/hw-transport-webusb")).default;
+    const AppStellar = (await import("@ledgerhq/hw-app-str")).default;
+    
+    ledgerTransport = await TransportWebUSB.create();
+    ledgerApp = new AppStellar(ledgerTransport);
+    
+    const result = await ledgerApp.signTransaction("", xdr);
+    const signedXDR = result.signature;
+    
+    await ledgerTransport.close();
+    ledgerTransport = null;
+    ledgerApp = null;
+    
+    return { signedXDR, error: null };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    
+    if (ledgerTransport) {
+      try {
+        await ledgerTransport.close();
+      } catch {
+        // Ignore close errors
+      }
+      ledgerTransport = null;
+      ledgerApp = null;
+    }
+    
+    if (message.includes("No device found")) {
+      return { signedXDR: null, error: "Ledger device not found. Please connect your Ledger and unlock it." };
+    }
+    if (message.includes("Locked")) {
+      return { signedXDR: null, error: "Ledger device is locked. Please unlock it." };
+    }
+    if (message.includes("Stellar app is not open")) {
+      return { signedXDR: null, error: "Please open the Stellar app on your Ledger device." };
+    }
+    if (message.includes("Transaction rejected")) {
+      return { signedXDR: null, error: "Transaction rejected on Ledger device." };
+    }
+    
+    return { signedXDR: null, error: `Ledger signing error: ${message}` };
+  }
 }

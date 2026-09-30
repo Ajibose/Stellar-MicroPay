@@ -49,7 +49,7 @@ export default function Custom404() {
         </h2>
 
         <p className="text-slate-400 text-base mb-8 leading-relaxed">
-          {`The stellar path you're looking for seems to have drifted into deep space.`} 
+          {`The stellar path you're looking for seems to have drifted into deep space.`}
           <br />
           {`Let's get you back to safety.`}
         </p>

@@ -1,81 +1,78 @@
-/**
- * src/services/webhookService.js
- * Facade that composes webhookStore + paymentMonitor.
- * Kept for backward compatibility — existing code and tests import from here.
- *
- * registerWebhook here wraps the store's version and also calls ensureMonitored,
- * so callers don't need to import paymentMonitor separately.
- */
-
 "use strict";
 
-const store = require("./webhookStore");
-const { deliverWebhook } = require("./webhookDelivery");
-const {
-  startMonitoring,
-  stopMonitoring,
-  ensureMonitored,
-  resumeAllMonitors,
-} = require("./paymentMonitor");
+const crypto = require("crypto");
 
-/**
- * Register a webhook and immediately start (or confirm) monitoring.
- * Accepts positional args (publicKey, url, secret) to match existing call sites.
- *
- * @param {string} publicKey
- * @param {string} url
- * @param {string} secret
- * @returns {import('./webhookStore').Webhook}
- */
-function registerWebhook(publicKey, url, secret) {
-  const webhook = store.registerWebhook(publicKey, url, secret);
-  ensureMonitored(publicKey);
-  return webhook;
-}
+const webhooks = new Map();
+const RETRY_DELAYS_MS = [250, 500, 1000];
 
-/**
- * Delete a webhook by id.
- * When the deleted webhook was the last one for its account, the live
- * Horizon SSE stream is closed and removed from activeStreams.
- *
- * @param {string} id
- * @returns {boolean} true if deleted, false if not found
- */
-function deleteWebhook(id) {
-  const webhook = store.getWebhookById(id);
-  if (!webhook) return false;
-
-  const { publicKey } = webhook;
-  const deleted = store.deleteWebhook(id);
-
-  if (deleted) {
-    const remaining = store.getWebhooksByPublicKey(publicKey);
-    if (remaining.length === 0) {
-      stopMonitoring(publicKey);
-    }
+function register({ url, publicKey, secret }) {
+  if (!url || !publicKey || !secret) {
+    const error = new Error("url, publicKey, and secret are required");
+    error.status = 400;
+    throw error;
+  }
+  try {
+    const parsed = new URL(url);
+    if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error();
+  } catch {
+    const error = new Error("url must be a valid HTTP(S) URL");
+    error.status = 400;
+    throw error;
+  }
+  if (!/^G[A-Z0-9]{55}$/.test(publicKey)) {
+    const error = new Error("publicKey must be a valid Stellar public key");
+    error.status = 400;
+    throw error;
   }
 
-  return deleted;
+  const webhook = { id: crypto.randomUUID(), url, publicKey, secret, createdAt: new Date().toISOString() };
+  webhooks.set(webhook.id, webhook);
+  return { id: webhook.id, url: webhook.url, publicKey: webhook.publicKey, createdAt: webhook.createdAt };
 }
 
-module.exports = {
-  // composed registration (store + monitor)
-  registerWebhook,
+function remove(id) {
+  return webhooks.delete(id);
+}
 
-  // composed deletion (store + monitor cleanup)
-  deleteWebhook,
+function signature(secret, body) {
+  return crypto.createHmac("sha256", secret).update(body).digest("hex");
+}
 
-  // store pass-throughs
-  getWebhooksByPublicKey: store.getWebhooksByPublicKey,
-  getWebhookById:         store.getWebhookById,
-  getAllWebhooks:          store.getAllWebhooks,
+async function deliver(webhook, payload, fetchImpl = fetch) {
+  const body = JSON.stringify(payload);
+  let lastError;
+  for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      const response = await fetchImpl(webhook.url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-stellar-micropay-signature": signature(webhook.secret, body),
+        },
+        body,
+      });
+      if (response.ok) return;
+      lastError = new Error(`Webhook responded with ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < RETRY_DELAYS_MS.length - 1) {
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+    }
+  }
+  throw lastError;
+}
 
-  // delivery
-  deliverWebhook,
+async function publishPayment(payment, fetchImpl = fetch) {
+  const deliveries = [];
+  for (const webhook of webhooks.values()) {
+    if (webhook.publicKey !== payment.senderPublicKey && webhook.publicKey !== payment.creatorPublicKey) continue;
+    const direction = webhook.publicKey === payment.senderPublicKey ? "sent" : "received";
+    deliveries.push(deliver(webhook, { type: `payment.${direction}`, direction, payment }, fetchImpl));
+  }
+  return Promise.allSettled(deliveries);
+}
 
-  // monitor
-  startMonitoring,
-  stopMonitoring,
-  ensureMonitored,
-  resumeAllMonitors,
-};
+function clear() { webhooks.clear(); }
+
+module.exports = { register, remove, deliver, publishPayment, signature, clear, RETRY_DELAYS_MS };

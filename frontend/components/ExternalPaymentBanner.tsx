@@ -9,10 +9,10 @@ interface ExternalPaymentBannerProps {
   onDismiss: () => void;
 }
 
-export default function ExternalPaymentBanner({ 
-  message, 
-  originDomain, 
-  onDismiss 
+export default function ExternalPaymentBanner({
+  message,
+  originDomain,
+  onDismiss
 }: ExternalPaymentBannerProps) {
   return (
     <div className="bg-stellar-500/10 border border-stellar-500/20 rounded-lg p-4 mb-6 animate-slide-up">
@@ -22,7 +22,7 @@ export default function ExternalPaymentBanner({
             <ExternalLinkIcon className="w-4 h-4 text-stellar-400" />
           </div>
         </div>
-        
+
         <div className="flex-1 min-w-0">
           <h3 className="text-sm font-medium text-stellar-300 mb-1">
             Payment request from external app
@@ -31,12 +31,12 @@ export default function ExternalPaymentBanner({
             {message || 'Send a payment using the pre-filled form below.'}
           </p>
           {originDomain && (
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-slate-500">
               Origin: <span className="font-mono">{originDomain}</span>
             </p>
           )}
         </div>
-        
+
         <button
           onClick={onDismiss}
           className="flex-shrink-0 p-1 rounded-md text-slate-400 hover:text-slate-300 hover:bg-white/5 transition-colors"

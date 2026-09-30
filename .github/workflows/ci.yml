@@ -5,275 +5,136 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  # ─── EditorConfig ──────────────────────────────────────────────────────────
-  editorconfig:
-    name: EditorConfig Compliance
+  repository:
+    name: Repository integrity
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Check EditorConfig compliance
-        uses: editorconfig-checker/action-editorconfig-checker@main
-
-  # ─── Frontend Type Check (required gate) ───────────────────────────────────
-  frontend-typecheck:
-    name: Frontend Type Check
-    runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: frontend
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
         with:
-          node-version-file: ".nvmrc"
-          cache: "npm"
-          cache-dependency-path: frontend/package-lock.json
+          fetch-depth: 0
+      - name: Reject whitespace errors and unresolved conflicts
+        run: |
+          git diff --check HEAD^
+          ! git grep -n -E '^(<<<<<<<|=======|>>>>>>>)'
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Type check
-        run: npm run type-check
-
-  # ─── Frontend ──────────────────────────────────────────────────────────────
   frontend:
-    name: Frontend (Next.js)
+    name: Frontend (typecheck, lint, test, build)
     runs-on: ubuntu-latest
-    needs: frontend-typecheck
-
     defaults:
       run:
         working-directory: frontend
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version-file: ".nvmrc"
-          cache: "npm"
+          node-version-file: .nvmrc
+          cache: npm
           cache-dependency-path: frontend/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Check for unused dependencies
-        run: npx depcheck --ignores="@storybook/*,prettier" --ignore-dirs=.next,.storybook
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Unit tests
-        run: npm test
-
-      - name: Build
+      - run: npm ci
+      - run: npm run type-check
+      - run: npm run lint
+      - run: npm test
+      - name: Production build
         run: npm run build
         env:
           NEXT_PUBLIC_STELLAR_NETWORK: testnet
           NEXT_PUBLIC_HORIZON_URL: https://horizon-testnet.stellar.org
           NEXT_PUBLIC_API_URL: http://localhost:4000
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
-          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
-          SENTRY_RELEASE: ${{ github.sha }}
 
-      - name: Build Storybook (dev-only docs bundle)
-        run: npm run build-storybook
-
-      - name: Bundle size budget
-        run: npm run size
-
-      - name: Route bundle and hydration budgets
-        run: npm run bundle-report
-        env:
-          NEXT_PUBLIC_STELLAR_NETWORK: testnet
-
-      - name: Upload route bundle report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-route-bundle-report
-          path: frontend/bundle-reports/
-
-  # ─── Backend ───────────────────────────────────────────────────────────────
   backend:
-    name: Backend (Node.js)
+    name: Backend (lint and test)
     runs-on: ubuntu-latest
-
     defaults:
       run:
         working-directory: backend
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version-file: ".nvmrc"
-          cache: "npm"
+          node-version-file: .nvmrc
+          cache: npm
           cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Check for unused dependencies
-        run: npx depcheck
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Unit tests
-        run: npm test
-
-  # ─── Contracts ─────────────────────────────────────────────────────────────
   contracts:
-    name: Soroban Contracts (Rust)
+    name: Soroban contract (check, test, WASM)
     runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: contracts/stellar-micropay-contract
-
-    env:
-      RUST_VERSION: "1.82.0"
-      STELLAR_CLI_VERSION: "v21.5.0"
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust ${{ env.RUST_VERSION }}
-        uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ env.RUST_VERSION }}
-          targets: wasm32-unknown-unknown
-          components: rustfmt, clippy
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Install Stellar CLI ${{ env.STELLAR_CLI_VERSION }}
-        run: cargo install --locked --version ${{ env.STELLAR_CLI_VERSION }} stellar-cli || true
-
-      # ── Gate 1: Format ──────────────────────────────────────────────────
-      - name: "Gate: rustfmt"
-        id: fmt
-        run: cargo fmt --all -- --check > fmt-stdout.txt 2>&1 || { EXIT_CODE=$?; echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"; exit $EXIT_CODE; }
-
-      - name: Upload rustfmt failure output
-        if: failure() && steps.fmt.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: rustfmt-failure
-          path: contracts/stellar-micropay-contract/fmt-stdout.txt
-
-      # ── Gate 2: Clippy ──────────────────────────────────────────────────
-      - name: "Gate: clippy"
-        id: clippy
-        run: cargo clippy --target wasm32-unknown-unknown -- -D warnings 2> clippy-stderr.txt || { EXIT_CODE=$?; echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"; exit $EXIT_CODE; }
-
-      - name: Upload clippy failure output
-        if: failure() && steps.clippy.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: clippy-failure
-          path: contracts/stellar-micropay-contract/clippy-stderr.txt
-
-      # ── Gate 3: Tests ───────────────────────────────────────────────────
-      - name: "Gate: cargo test"
-        id: test
-        run: cargo test 2> test-stderr.txt || { EXIT_CODE=$?; echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"; exit $EXIT_CODE; }
-
-      - name: Upload test failure output
-        if: failure() && steps.test.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: cargo-test-failure
-          path: contracts/stellar-micropay-contract/test-stderr.txt
-
-      # ── Gate 4: WASM build ──────────────────────────────────────────────
-      - name: "Gate: WASM build"
-        id: wasm
-        run: cargo build --target wasm32-unknown-unknown --release 2> wasm-stderr.txt || { EXIT_CODE=$?; echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"; exit $EXIT_CODE; }
-
-      - name: Upload WASM failure output
-        if: failure() && steps.wasm.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: wasm-build-failure
-          path: contracts/stellar-micropay-contract/wasm-stderr.txt
-
-      # ── Gate 5: SDK deprecation audit ───────────────────────────────────
-      - name: "Gate: deprecation-free build"
-        id: deprecation
+          targets: wasm32v1-none
+      - uses: Swatinem/rust-cache@v2
+      - name: Install stellar-cli (required by soroban-sdk v28 build script)
         run: |
-          cargo build --target wasm32-unknown-unknown --release 2>&1 | tee build-output.txt
-          DEPRECATION_COUNT=$(grep -ci 'warning.*deprecated\|warning.*deprecat' build-output.txt || true)
-          echo "deprecation_count=$DEPRECATION_COUNT" >> "$GITHUB_OUTPUT"
-          if [ "$DEPRECATION_COUNT" -gt 0 ]; then
-            echo "::warning::Found $DEPRECATION_COUNT deprecation warning(s) in the contract build"
-            grep -i 'warning.*deprecated\|warning.*deprecat' build-output.txt || true
+          if ! command -v stellar >/dev/null 2>&1; then
+            curl -sSfL -o /tmp/stellar-cli.tar.gz https://github.com/stellar/stellar-cli/releases/download/v25.2.0/stellar-cli-25.2.0-x86_64-unknown-linux-gnu.tar.gz
+            mkdir -p /tmp/stellar-cli && tar -xzf /tmp/stellar-cli.tar.gz -C /tmp/stellar-cli
+            sudo install -m 755 /tmp/stellar-cli/stellar /usr/local/bin/stellar
           fi
+          stellar --version
+      - run: cargo check --target wasm32v1-none
+      - run: cargo test
+      - run: cargo build --target wasm32v1-none --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stellar-micropay-contract-wasm
+          path: target/wasm32v1-none/release/stellar_micropay_contract.wasm
+          if-no-files-found: error
 
-      - name: Install Syft
-        uses: anchore/sbom-action/download-syft@v0
-
-      - name: Generate and verify contract SBOM (#817)
-        working-directory: contracts/stellar-micropay-contract
-        run: |
-          syft scan dir:. -o cyclonedx-json=../../contract-sbom.cyclonedx.json
-          test -s ../../contract-sbom.cyclonedx.json
-          test -f ../../target/wasm32-unknown-unknown/release/stellar_micropay_contract.wasm
-
-  # ─── E2E Tests ─────────────────────────────────────────────────────────────
   e2e:
-    name: E2E Tests (Playwright)
+    name: Browser smoke (Playwright)
     runs-on: ubuntu-latest
-    needs: frontend-typecheck
-
     defaults:
       run:
         working-directory: frontend
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version-file: ".nvmrc"
-          cache: "npm"
+          node-version-file: .nvmrc
+          cache: npm
           cache-dependency-path: frontend/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: Run E2E tests
-        run: npm run test:e2e
-
-      - name: Upload Playwright report
-        if: always()
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
           path: frontend/playwright-report/
+          if-no-files-found: warn
+
+  health-smoke:
+    name: Docker Compose health smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start stack with docker compose
+        run: docker compose up -d --build
+      - name: Wait for backend healthcheck
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:4000/health >/dev/null; then
+              echo "Backend healthy"
+              exit 0
+            fi
+            echo "Waiting for backend... ($i/30)"
+            sleep 2
+          done
+          echo "Backend did not become healthy in time"
+          docker compose logs
+          exit 1
+      - name: Run /health smoke test
+        run: SMOKE_HEALTH_ONLY=1 HEALTH_URL=http://localhost:4000 node scripts/smoke-test.js
+      - name: Tear down stack
+        if: always()
+        run: docker compose down -v

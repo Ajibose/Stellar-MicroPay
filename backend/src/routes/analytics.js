@@ -8,7 +8,7 @@
 const express = require("express");
 const router = express.Router();
 const { strictLimiter } = require("../middleware/rateLimit");
-const { sanitizePublicKey } = require("../middleware/sanitization");
+const { validatePublicKey } = require("../middleware/sanitization");
 const analyticsController = require("../controllers/analyticsController");
 
 /**
@@ -18,7 +18,7 @@ const analyticsController = require("../controllers/analyticsController");
 router.get(
   "/:publicKey/summary",
   strictLimiter,
-  sanitizePublicKey,
+  validatePublicKey(),
   analyticsController.getSummary
 );
 
@@ -29,7 +29,7 @@ router.get(
 router.get(
   "/:publicKey/top-recipients",
   strictLimiter,
-  sanitizePublicKey,
+  validatePublicKey(),
   analyticsController.getTopRecipients
 );
 
@@ -40,63 +40,8 @@ router.get(
 router.get(
   "/:publicKey/activity",
   strictLimiter,
-  sanitizePublicKey,
+  validatePublicKey(),
   analyticsController.getActivityByDay
-);
-
-/**
- * GET /api/analytics/:publicKey/cohorts
- * Returns repeat vs one-time counterparties grouped by period.
- */
-router.get(
-  "/:publicKey/cohorts",
-  strictLimiter,
-  sanitizePublicKey,
-  analyticsController.getCohortBreakdown
-);
-
-/**
- * GET /api/analytics/:publicKey/stream
- * Server-sent events stream for new payment operations.
- */
-router.get(
-  "/:publicKey/stream",
-  strictLimiter,
-  sanitizePublicKey,
-  analyticsController.streamPayments
-);
-
-/**
- * POST /api/analytics/:publicKey/export-schedule
- * Set up recurring email export.
- */
-router.post(
-  "/:publicKey/export-schedule",
-  strictLimiter,
-  sanitizePublicKey,
-  analyticsController.scheduleExport
-);
-
-/**
- * GET /api/analytics/:publicKey/export-schedule
- * Get scheduled export configuration.
- */
-router.get(
-  "/:publicKey/export-schedule",
-  strictLimiter,
-  sanitizePublicKey,
-  analyticsController.getExportSchedule
-);
-
-/**
- * POST /api/analytics/:publicKey/export-trigger
- * Manually trigger sending export email.
- */
-router.post(
-  "/:publicKey/export-trigger",
-  strictLimiter,
-  sanitizePublicKey,
-  analyticsController.triggerExport
 );
 
 module.exports = router;

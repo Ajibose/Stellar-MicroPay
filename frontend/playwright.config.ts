@@ -13,7 +13,6 @@ export default defineConfig({
         ['html'],
         ['junit', { outputFile: 'test-results/results.xml' }],
         ['json', { outputFile: 'test-results/results.json' }],
-        ['lcov'],
       ]
     : 'html',
   expect: {
@@ -21,6 +20,9 @@ export default defineConfig({
   },
   use: {
     baseURL: 'http://localhost:3000',
+    launchOptions: process.env.PLAYWRIGHT_EXECUTABLE_PATH
+      ? { executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH }
+      : undefined,
     trace: 'on-first-retry',
     // storageState removed — wallet auth is injected via addInitScript in each test/fixture
     headless: true,
@@ -42,10 +44,5 @@ export default defineConfig({
     url: 'http://localhost:3000',
     reuseExistingServer: !process.env.CI,
     timeout: 300_000,
-    env: {
-      NEXT_PUBLIC_STELLAR_NETWORK: 'testnet',
-      NEXT_PUBLIC_HORIZON_URL: 'https://horizon-testnet.stellar.org',
-      NEXT_PUBLIC_API_URL: 'http://localhost:4000',
-    },
   },
 });

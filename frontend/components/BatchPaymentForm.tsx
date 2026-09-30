@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   buildPaymentTransaction,
   isValidStellarAddress,
@@ -8,9 +8,8 @@ import {
   truncateMemoText,
 } from "@/lib/stellar";
 import { signTransactionWithWallet } from "@/lib/wallet";
-import { formatXLMPrecise, parseBatchRecipientsCSV } from "@/utils/format";
 
-const MAX_RECIPIENTS = 10;
+const MAX_RECIPIENTS = 100;
 
 type RecipientStatus = "idle" | "pending" | "success" | "failed";
 
@@ -30,24 +29,14 @@ interface BatchPaymentFormProps {
   onBatchSuccess?: () => void;
 }
 
-function createRecipient(overrides: Partial<BatchRecipient> = {}): BatchRecipient {
+function createRecipient(): BatchRecipient {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     address: "",
     amount: "",
     memo: "",
     status: "idle",
-    ...overrides,
   };
-}
-
-function readFileAsText(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Could not read the selected file."));
-    reader.onload = () => resolve(String(reader.result ?? ""));
-    reader.readAsText(file);
-  });
 }
 
 export default function BatchPaymentForm({
@@ -60,8 +49,6 @@ export default function BatchPaymentForm({
   ]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [batchMessage, setBatchMessage] = useState<string | null>(null);
-  const [importMessage, setImportMessage] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const xlmBalanceValue = parseFloat(xlmBalance || "0");
   const availableXLM = Math.max(
@@ -90,6 +77,9 @@ export default function BatchPaymentForm({
         recipient.address !== publicKey
     );
   const exceedsBalance = totalXLM > availableXLM;
+  const allRowsValid = recipients.every(
+    (r) => isValidStellarAddress(r.address) && parseFloat(r.amount) > 0 && r.address !== publicKey
+  );
 
   const updateRecipient = (
     id: string,
@@ -111,72 +101,6 @@ export default function BatchPaymentForm({
   const handleRemoveRecipient = (id: string) => {
     setRecipients((current) => current.filter((recipient) => recipient.id !== id));
     setBatchMessage(null);
-  };
-
-  const importRecipientsFromCSV = (csv: string) => {
-    const rows = parseBatchRecipientsCSV(csv);
-
-    if (rows.length === 0) {
-      setImportMessage("No recipients found in that CSV file.");
-      return;
-    }
-
-    const accepted = rows.slice(0, MAX_RECIPIENTS);
-    const skipped = rows.length - accepted.length;
-
-    const imported = accepted.map((row) => {
-      // A row can be malformed (missing/invalid columns) or structurally fine
-      // but still unusable — flag either way instead of dropping the row.
-      const error =
-        row.error ??
-        (!isValidStellarAddress(row.address)
-          ? "Invalid Stellar address."
-          : row.address === publicKey
-            ? "Recipient address cannot be the same as your wallet."
-            : null);
-
-      return createRecipient({
-        address: row.address,
-        amount: row.amount,
-        memo: truncateMemoText(row.memo),
-        status: error ? "failed" : "idle",
-        error: error ?? undefined,
-      });
-    });
-
-    setRecipients(imported);
-    setBatchMessage(null);
-
-    const invalidCount = imported.filter((recipient) => recipient.status === "failed").length;
-    const validCount = imported.length - invalidCount;
-
-    const parts = [`Imported ${validCount} recipient${validCount === 1 ? "" : "s"}.`];
-    if (invalidCount > 0) {
-      parts.push(
-        `${invalidCount} row${invalidCount === 1 ? "" : "s"} need attention — see the errors below.`
-      );
-    }
-    if (skipped > 0) {
-      parts.push(`${skipped} extra row${skipped === 1 ? "" : "s"} skipped (max ${MAX_RECIPIENTS}).`);
-    }
-    setImportMessage(parts.join(" "));
-  };
-
-  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    // Reset the input so re-picking the same file fires another change event.
-    event.target.value = "";
-    if (!file) return;
-
-    setImportMessage(null);
-
-    try {
-      importRecipientsFromCSV(await readFileAsText(file));
-    } catch (err: unknown) {
-      setImportMessage(
-        err instanceof Error ? err.message : "Could not read the selected file."
-      );
-    }
   };
 
   const validateRecipient = (recipient: BatchRecipient) => {
@@ -289,39 +213,10 @@ export default function BatchPaymentForm({
             Send XLM to up to {MAX_RECIPIENTS} recipients sequentially.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isProcessing}
-            className="btn-secondary px-3 py-1.5 text-xs disabled:opacity-50"
-          >
-            Import CSV
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".csv,text/csv"
-            onChange={handleImportFile}
-            disabled={isProcessing}
-            aria-label="Import recipients from CSV"
-            className="hidden"
-          />
-          <div className="rounded-full bg-white/5 px-3 py-1 text-xs font-semibold text-slate-300">
-            {recipientCount} / {MAX_RECIPIENTS}
-          </div>
+        <div className="rounded-full bg-white/5 px-3 py-1 text-xs font-semibold text-slate-300">
+          {recipientCount} / {MAX_RECIPIENTS}
         </div>
       </div>
-
-      <p className="-mt-4 mb-4 text-xs text-slate-500">
-        CSV columns: address, amount, memo (header row optional).
-      </p>
-
-      {importMessage && (
-        <div className="mb-4 rounded-2xl border border-slate-700 bg-slate-800/70 px-4 py-3 text-sm text-slate-200">
-          {importMessage}
-        </div>
-      )}
 
       <div className="space-y-4">
         {recipients.map((recipient, index) => (
@@ -384,7 +279,7 @@ export default function BatchPaymentForm({
 
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="text-sm text-slate-300">
-                  Status: 
+                  Status:
                   {recipient.status === "idle" && (
                     <span className="text-slate-400">Waiting</span>
                   )}
@@ -429,9 +324,15 @@ export default function BatchPaymentForm({
             Add recipient
           </button>
           <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-300">
-            Total: <span className="font-semibold text-white">{formatXLMPrecise(totalXLM)}</span>
+            Total: <span className="font-semibold text-white">{totalXLM.toFixed(7)} XLM</span>
           </div>
         </div>
+
+        <table className="w-full text-sm">
+          <thead className="text-left text-xs uppercase tracking-wide text-slate-500"><tr><th>Recipient</th><th>Amount</th><th>Asset</th></tr></thead>
+          <tbody>{recipients.map((r) => <tr key={r.id} className={!isValidStellarAddress(r.address) ? "bg-rose-500/10 text-rose-300" : "text-slate-300"}><td className="font-mono">{r.address.slice(0, 8) || "G..."}</td><td>{Number(r.amount || 0).toFixed(2)}</td><td>XLM</td></tr>)}</tbody>
+          <tfoot className="border-t border-white/10 text-slate-300"><tr><td>Total</td><td className="font-semibold text-white">{totalXLM.toFixed(2)} XLM</td><td /></tr></tfoot>
+        </table>
 
         {exceedsBalance ? (
           <div className="rounded-2xl bg-amber-500/10 border border-amber-500/20 px-4 py-3 text-sm text-amber-100">
@@ -449,10 +350,10 @@ export default function BatchPaymentForm({
           <button
             type="button"
             onClick={handleSendBatch}
-            disabled={!canSubmit || isProcessing || exceedsBalance}
+            disabled={!canSubmit || isProcessing || exceedsBalance || !allRowsValid}
             className="btn-primary w-full sm:w-auto py-2.5"
           >
-            {isProcessing ? "Sending batch..." : "Send batch"}
+            {isProcessing ? "Sending batch..." : "Confirm & Send"}
           </button>
           <button
             type="button"

@@ -8,11 +8,8 @@
 const rateLimit = require("express-rate-limit");
 
 /**
- * Read-only rate limiting — 20 requests per minute.
- * Applied to analytics, tips, federation, and account registration routes.
- *
- * standardHeaders: true  → emits RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset.
- * legacyHeaders: false   → suppresses deprecated X-RateLimit-* headers.
+ * Strict rate limiting — 20 requests per minute.
+ * Applied to sensitive lookups like accounts and payments.
  */
 const strictLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
@@ -23,31 +20,25 @@ const strictLimiter = rateLimit({
 });
 
 /**
- * Payment/turret rate limiting — 10 requests per minute.
- * Applied to payments and turrets routes.
- *
- * standardHeaders: true  → emits RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset.
- * legacyHeaders: false   → suppresses deprecated X-RateLimit-* headers.
+ * Authentication challenge requests — 5 requests per minute per IP.
  */
-const paymentLimiter = rateLimit({
+const authChallengeLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 10,
+  max: 5,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: "Too many requests to payment/turret routes, please wait 1 minute." },
+  message: { error: "Too many authentication challenge requests, please wait 1 minute." },
 });
 
 /**
- * Sensitive route limiting — 10 requests per minute (#205).
- * Applied to account lookup and balance endpoints that could be used for
- * account enumeration.
+ * Authentication verification requests — 5 requests per minute per IP.
  */
-const sensitiveLimiter = rateLimit({
+const authVerifyLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 10,
+  max: 5,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: "Too many requests to this endpoint, please wait 1 minute." },
+  message: { error: "Too many authentication verification requests, please wait 1 minute." },
 });
 
-module.exports = { strictLimiter, paymentLimiter, sensitiveLimiter };
+module.exports = { strictLimiter, authChallengeLimiter, authVerifyLimiter };

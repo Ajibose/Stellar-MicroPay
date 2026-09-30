@@ -1,93 +1,66 @@
 /**
  * components/ErrorBoundary.tsx
- * Custom premium error boundary to isolate and catch rendering errors in critical widgets.
+ * Class-based error boundary: catches render errors in its subtree and
+ * shows a friendly fallback UI instead of crashing the whole app.
  */
 
-import React, { Component, ErrorInfo, ReactNode } from "react";
-import { AlertCircleIcon } from "@/components/icons";
+import { Component, type ErrorInfo, type ReactNode } from "react";
 
-interface Props {
+export interface ErrorBoundaryProps {
   children: ReactNode;
-  fallback?: ReactNode;
-  name?: string;
+  /** Optional custom fallback UI. Receives the error and a reset callback. */
+  fallback?: (error: Error, reset: () => void) => ReactNode;
+  /**
+   * Called with the caught error and React's component stack, in addition
+   * to the default `console.error` logging. Wire this to an error reporting
+   * service (e.g. Sentry) when one is configured.
+   */
+  onError?: (error: Error, errorInfo: ErrorInfo) => void;
 }
 
-interface State {
-  hasError: boolean;
+interface ErrorBoundaryState {
   error: Error | null;
 }
 
-export class ErrorBoundary extends Component<Props, State> {
-  public state: State = {
-    hasError: false,
-    error: null,
-  };
+export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { error: null };
 
-  public static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, error };
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { error };
   }
 
-  public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error(`ErrorBoundary caught an error in ${this.props.name || "component"}:`, error, errorInfo);
+  componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
+    console.error("[ErrorBoundary] Unhandled render error:", error, errorInfo);
+    this.props.onError?.(error, errorInfo);
   }
 
-  private handleReset = () => {
-    this.setState({ hasError: false, error: null });
+  reset = (): void => {
+    this.setState({ error: null });
   };
 
-  public render() {
-    if (this.state.hasError) {
-      if (this.props.fallback) {
-        return this.props.fallback;
-      }
+  render(): ReactNode {
+    const { error } = this.state;
+    if (!error) return this.props.children;
 
-      return (
-        <div className="p-6 rounded-2xl border border-red-500/20 bg-red-950/10 backdrop-blur-md text-slate-200 shadow-xl max-w-lg mx-auto my-4 animate-fade-in">
-          <div className="flex items-start gap-4">
-            <div className="p-3 rounded-xl bg-red-500/10 text-red-400 flex-shrink-0">
-              <AlertCircleIcon className="w-6 h-6" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <h3 className="text-lg font-semibold text-red-400">
-                Failed to load {this.props.name || "component"}
-              </h3>
-              <p className="mt-1 text-sm text-slate-400 leading-relaxed">
-                An unexpected error occurred while rendering this section.
-              </p>
-              {this.state.error && (
-                <div className="mt-3 p-3 rounded-lg bg-black/40 border border-white/5 text-xs font-mono text-slate-500 max-h-32 overflow-auto">
-                  {this.state.error.toString()}
-                </div>
-              )}
-              <button
-                onClick={this.handleReset}
-                className="mt-4 px-4 py-2 bg-red-500/20 hover:bg-red-500/30 active:bg-red-500/40 border border-red-500/30 text-red-300 text-sm font-medium rounded-xl transition-all duration-200"
-              >
-                Try Again
-              </button>
-            </div>
-          </div>
-        </div>
-      );
+    if (this.props.fallback) {
+      return this.props.fallback(error, this.reset);
     }
 
-    return this.props.children;
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-white px-4 dark:bg-cosmos-900">
+        <div className="w-full max-w-sm rounded-xl border border-red-400/30 bg-red-400/5 p-6 text-center">
+          <h1 className="font-display text-lg font-semibold text-slate-900 dark:text-white">
+            Something went wrong
+          </h1>
+          <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+            An unexpected error occurred. You can try again, or reload the page
+            if the problem persists.
+          </p>
+          <button onClick={this.reset} className="btn-primary mt-4 px-4 py-2 text-sm">
+            Try again
+          </button>
+        </div>
+      </div>
+    );
   }
-}
-
-export function withErrorBoundary<P extends object>(
-  WrappedComponent: React.ComponentType<P>,
-  name: string
-) {
-  const ComponentWithErrorBoundary = (props: P) => (
-    <ErrorBoundary name={name}>
-      <WrappedComponent {...props} />
-    </ErrorBoundary>
-  );
-
-  ComponentWithErrorBoundary.displayName = `WithErrorBoundary(${
-    WrappedComponent.displayName || WrappedComponent.name || "Component"
-  })`;
-
-  return ComponentWithErrorBoundary;
 }

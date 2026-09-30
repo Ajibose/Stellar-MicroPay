@@ -134,5 +134,4 @@ module.exports = {
   removeUsername,
   validateUsername,
   validatePublicKey,
-  usernameMap,
 };

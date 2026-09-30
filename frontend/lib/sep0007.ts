@@ -31,33 +31,18 @@ export interface URIParseResult {
  */
 export function parseStellarURI(uri: string): URIParseResult {
   try {
-    // Accept three forms:
-    //   1. stellar:pay?destination=…           (SEP-0007 canonical)
-    //   2. web+stellar:pay?destination=…       (SEP-0007 PWA-friendly)
-    //   3. stellarmicropay://pay?to=…&amount=… (issue #209 deep link)
-    //
-    // The third form uses `to=` as a shorthand for `destination=`; we
-    // rewrite it transparently so the rest of the parser stays SEP-0007
-    // shaped. Everything else (amount, memo, etc.) keeps the SEP-0007
-    // parameter names.
+    // Handle both stellar:pay and web+stellar:pay
     const stellarRegex = /^(?:web\+)?stellar:pay\?(.+)$/;
-    const microPayRegex = /^stellarmicropay:\/\/pay\?(.+)$/;
-    const stellarMatch = uri.match(stellarRegex);
-    const microPayMatch = uri.match(microPayRegex);
+    const match = uri.match(stellarRegex);
 
-    if (!stellarMatch && !microPayMatch) {
+    if (!match) {
       return {
         success: false,
-        error: 'Invalid Stellar URI format. Expected stellar:pay, web+stellar:pay, or stellarmicropay://pay'
+        error: 'Invalid Stellar URI format. Expected stellar:pay or web+stellar:pay'
       };
     }
 
-    let queryString = (stellarMatch ?? microPayMatch)![1];
-    if (microPayMatch) {
-      // Rewrite `to=` → `destination=` so URLSearchParams downstream
-      // doesn't need a second code path.
-      queryString = queryString.replace(/(^|&)to=/g, '$1destination=');
-    }
+    const queryString = match[1];
     const params = new URLSearchParams(queryString);
 
     // Extract required parameters
@@ -82,25 +67,9 @@ export function parseStellarURI(uri: string): URIParseResult {
     const assetCode = params.get('asset_code') || undefined;
     const assetIssuer = params.get('asset_issuer') || undefined;
     const memo = params.get('memo') || undefined;
-    const memoTypeRaw = params.get('memo_type');
-    const validMemoTypes = ['MEMO_TEXT', 'MEMO_ID', 'MEMO_HASH', 'MEMO_RETURN'] as const;
-    const memoType = memoTypeRaw && validMemoTypes.includes(memoTypeRaw as typeof validMemoTypes[number])
-      ? (memoTypeRaw as ParsedStellarURI['memoType'])
-      : undefined;
+    const memoType = params.get('memo_type') as any || undefined;
     const msg = params.get('msg') || undefined;
     const networkPassphrase = params.get('network_passphrase') || undefined;
-
-    if (networkPassphrase) {
-      if (
-        networkPassphrase !== 'Public Global Stellar Network ; September 2015' &&
-        networkPassphrase !== 'Test SDF Network ; September 2015'
-      ) {
-        return {
-          success: false,
-          error: 'Unsupported network passphrase'
-        };
-      }
-    }
     const originDomain = params.get('origin_domain') || undefined;
     const signature = params.get('signature') || undefined;
     const callback = params.get('callback') || undefined;
@@ -124,17 +93,11 @@ export function parseStellarURI(uri: string): URIParseResult {
       }
     }
 
-    // Validate asset issuer and asset code together
+    // Validate asset issuer if asset code is present but not XLM
     if (assetCode && assetCode !== 'XLM' && !assetIssuer) {
       return {
         success: false,
         error: 'asset_issuer is required when asset_code is not XLM'
-      };
-    }
-    if (assetIssuer && (!assetCode || assetCode === 'XLM')) {
-      return {
-        success: false,
-        error: 'asset_code is required and cannot be XLM when asset_issuer is provided'
       };
     }
 
@@ -170,12 +133,12 @@ export function parseStellarURI(uri: string): URIParseResult {
  */
 export function getStellarURIFromURL(): URIParseResult | null {
   if (typeof window === 'undefined') return null;
-  
+
   const urlParams = new URLSearchParams(window.location.search);
   const stellarURI = urlParams.get('uri');
-  
+
   if (!stellarURI) return null;
-  
+
   return parseStellarURI(stellarURI);
 }
 
@@ -185,7 +148,7 @@ export function getStellarURIFromURL(): URIParseResult | null {
  */
 export function registerProtocolHandler(): void {
   if (typeof window === 'undefined') return;
-  
+
   try {
     // Register for web+stellar: protocol
     navigator.registerProtocolHandler('web+stellar', `${window.location.origin}?uri=%s`);
@@ -203,9 +166,6 @@ export function uriToPrefillData(parsed: ParsedStellarURI) {
   return {
     destination: parsed.destination,
     amount: parsed.amount || '',
-    memo: parsed.memo || '',
-    assetCode: parsed.assetCode,
-    assetIssuer: parsed.assetIssuer,
-    networkPassphrase: parsed.networkPassphrase
+    memo: parsed.memo || ''
   };
 }

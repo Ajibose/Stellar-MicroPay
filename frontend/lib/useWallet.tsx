@@ -9,54 +9,19 @@ import {
 import {
   disconnectWallet as clearWalletConnection,
   getConnectedPublicKey,
-  signTransactionWithWallet,
 } from "@/lib/wallet";
 
 interface WalletContextValue {
   publicKey: string | null;
   isWalletReady: boolean;
-  connect: (nextPublicKey: string) => void;
-  disconnect: () => void;
   connectWallet: (nextPublicKey: string) => void;
   disconnectWallet: () => void;
-  signTransaction: (
-    transactionXDR: string,
-  ) => Promise<{ signedXDR: string | null; error: string | null }>;
 }
 
 const WalletContext = createContext<WalletContextValue | undefined>(undefined);
 
-const LAST_PUBLIC_KEY_STORAGE_KEY = "stellar-micropay:last-public-key";
-
-function loadLastPublicKey() {
-  if (typeof window === "undefined") return null;
-
-  try {
-    return window.localStorage.getItem(LAST_PUBLIC_KEY_STORAGE_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function saveLastPublicKey(publicKey: string | null) {
-  if (typeof window === "undefined") return;
-
-  try {
-    if (publicKey) {
-      window.localStorage.setItem(LAST_PUBLIC_KEY_STORAGE_KEY, publicKey);
-    } else {
-      window.localStorage.removeItem(LAST_PUBLIC_KEY_STORAGE_KEY);
-    }
-  } catch {
-    // Ignore storage failures (private browsing, full quota, etc.).
-  }
-}
-
-/** Provides the wallet context, tracking the connected public key and restoring the last-connected wallet on mount. */
 export function WalletProvider({ children }: { children: ReactNode }) {
-  const [publicKey, setPublicKey] = useState<string | null>(() =>
-    loadLastPublicKey(),
-  );
+  const [publicKey, setPublicKey] = useState<string | null>(null);
   const [isWalletReady, setIsWalletReady] = useState(false);
 
   useEffect(() => {
@@ -66,7 +31,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       .then((connectedPublicKey) => {
         if (!isActive) return;
         setPublicKey(connectedPublicKey);
-        saveLastPublicKey(connectedPublicKey);
       })
       .finally(() => {
         if (isActive) {
@@ -83,37 +47,20 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     () => ({
       publicKey,
       isWalletReady,
-      connect: (nextPublicKey: string) => {
-        saveLastPublicKey(nextPublicKey);
-        setPublicKey(nextPublicKey);
-      },
-      disconnect: () => {
-        clearWalletConnection();
-        saveLastPublicKey(null);
-        setPublicKey(null);
-      },
       connectWallet: (nextPublicKey: string) => {
-        saveLastPublicKey(nextPublicKey);
         setPublicKey(nextPublicKey);
       },
       disconnectWallet: () => {
         clearWalletConnection();
-        saveLastPublicKey(null);
         setPublicKey(null);
       },
-      signTransaction: async (transactionXDR: string) => {
-        return signTransactionWithWallet(transactionXDR);
-      },
     }),
-    [publicKey, isWalletReady],
+    [publicKey, isWalletReady]
   );
 
-  return (
-    <WalletContext.Provider value={value}>{children}</WalletContext.Provider>
-  );
+  return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;
 }
 
-/** Access the wallet context; throws if called outside a WalletProvider. */
 export function useWallet() {
   const context = useContext(WalletContext);
 

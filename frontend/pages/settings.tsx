@@ -3,67 +3,23 @@
  * Settings page with network switcher for testnet/mainnet/custom Horizon URL.
  */
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import Head from "next/head";
 import Link from "next/link";
 import { getNetworkConfig, setNetworkConfig, NetworkConfig } from "@/lib/stellar";
-import { disconnectWallet, signTransactionWithWallet } from "@/lib/wallet";
-import {
-  createTurretsChallenge,
-  deployTurretsFunction,
-  listTurretsFunctions,
-  pauseTurretsFunction,
-  resumeTurretsFunction,
-  TurretsDeployment,
-} from "@/lib/turrets";
+import { disconnectWallet } from "@/lib/wallet";
 import { shortenAddress } from "@/lib/stellar";
-import { useTheme } from "@/contexts/ThemeContext";
-import { resetOnboardingTour } from "@/hooks/useOnboarding";
+import { useWallet } from "@/lib/useWallet";
 
-interface SettingsPageProps {
-  publicKey: string | null;
-  onConnect: () => void;
-  onDisconnect: () => void;
-}
-
-// SNS section added
-export default function SettingsPage({
-  publicKey,
-  onConnect,
-  onDisconnect,
-}: SettingsPageProps) {
-  const { theme, toggleTheme, schedule, setSchedule } = useTheme();
+export default function SettingsPage() {
+  const { publicKey, disconnectWallet: disconnectCurrentWallet } = useWallet();
   const [config, setConfig] = useState<NetworkConfig>({
     network: "testnet",
     horizonUrl: "https://horizon-testnet.stellar.org",
   });
   const [customUrl, setCustomUrl] = useState("");
-  const [customRpcUrl, setCustomRpcUrl] = useState("");
-  const [endpointErrors, setEndpointErrors] = useState({ horizon: "", rpc: "" });
-  const customHorizonRef = useRef<HTMLInputElement>(null);
-  const customRpcRef = useRef<HTMLInputElement>(null);
   const [showMainnetWarning, setShowMainnetWarning] = useState(false);
   const [pendingNetwork, setPendingNetwork] = useState<"testnet" | "mainnet" | "custom" | null>(null);
-
-  const [deployments, setDeployments] = useState<TurretsDeployment[]>([]);
-  const [turretsLoading, setTurretsLoading] = useState(false);
-  const [turretsError, setTurretsError] = useState<string | null>(null);
-  const [turretsSuccess, setTurretsSuccess] = useState<string | null>(null);
-
-  const [dcaForm, setDcaForm] = useState({
-    amountQuote: "10",
-    intervalMinutes: "60",
-    quoteAssetCode: "USDC",
-    quoteAssetIssuer: "",
-  });
-
-  const [stopLossForm, setStopLossForm] = useState({
-    thresholdPrice: "0.10",
-    amountSell: "10",
-    sellAssetCode: "USDC",
-    sellAssetIssuer: "",
-    cooldownMinutes: "30",
-  });
 
   // Username registration state
   const [username, setUsername] = useState("");
@@ -80,11 +36,106 @@ export default function SettingsPage({
     setTourResetMessage("Tour reset — it will show again next time you open the dashboard.");
   };
 
+  // Price alert state
+  const [priceAlerts, setPriceAlerts] = useState<Array<{
+    id: number;
+    asset: string;
+    direction: 'above' | 'below';
+    targetPrice: number;
+    triggered: boolean;
+  }>>([]);
+  const [priceAlertForm, setPriceAlertForm] = useState({
+    asset: 'XLM',
+    direction: 'above' as 'above' | 'below',
+    targetPrice: '',
+  });
+  const [priceAlertLoading, setPriceAlertLoading] = useState(false);
+  const [priceAlertError, setPriceAlertError] = useState<string | null>(null);
+  const [priceAlertSuccess, setPriceAlertSuccess] = useState<string | null>(null);
+
+  // Fetch price alerts on mount
+  useEffect(() => {
+    const fetchPriceAlerts = async () => {
+      if (!publicKey) return;
+
+      const apiBase = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "";
+      try {
+        const response = await fetch(`${apiBase}/api/price-alerts?publicKey=${publicKey}`);
+        if (response.ok) {
+          const payload = await response.json();
+          if (payload?.success && Array.isArray(payload?.data)) {
+            setPriceAlerts(payload.data);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch price alerts:", err);
+      }
+    };
+
+    fetchPriceAlerts();
+  }, [publicKey]);
+
+  // Handle price alert creation
+  const handleCreatePriceAlert = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!publicKey) return;
+
+    setPriceAlertLoading(true);
+    setPriceAlertError(null);
+    setPriceAlertSuccess(null);
+
+    const apiBase = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "";
+    try {
+      const response = await fetch(`${apiBase}/api/price-alerts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          publicKey,
+          asset: priceAlertForm.asset,
+          direction: priceAlertForm.direction,
+          targetPrice: parseFloat(priceAlertForm.targetPrice),
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to create price alert");
+      }
+
+      const payload = await response.json();
+      if (payload?.success) {
+        setPriceAlerts([...priceAlerts, payload.data]);
+        setPriceAlertForm({ asset: "XLM", direction: "above", targetPrice: "" });
+        setPriceAlertSuccess("Price alert created successfully");
+      }
+    } catch (err) {
+      console.error("Failed to create price alert:", err);
+      setPriceAlertError(err instanceof Error ? err.message : "Failed to create price alert");
+    } finally {
+      setPriceAlertLoading(false);
+    }
+  };
+
+  // Handle price alert deletion
+  const handleDeletePriceAlert = async (id: number) => {
+    const apiBase = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "";
+    try {
+      const response = await fetch(`${apiBase}/api/price-alerts/${id}`, {
+        method: "DELETE",
+      });
+
+      if (response.ok) {
+        setPriceAlerts(priceAlerts.filter((a) => a.id !== id));
+      }
+    } catch (err) {
+      console.error("Failed to delete price alert:", err);
+    }
+  };
+
   // Fetch current username on mount
   useEffect(() => {
     const fetchUsername = async () => {
       if (!publicKey) return;
-      
+
       const apiBase = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "";
       try {
         const response = await fetch(
@@ -100,31 +151,8 @@ export default function SettingsPage({
         console.error("Error fetching username:", err);
       }
     };
-    
+
     fetchUsername();
-  }, [publicKey]);
-
-  useEffect(() => {
-    const loadTurretsDeployments = async () => {
-      if (!publicKey) {
-        setDeployments([]);
-        return;
-      }
-
-      setTurretsLoading(true);
-      setTurretsError(null);
-
-      try {
-        const data = await listTurretsFunctions(publicKey);
-        setDeployments(data);
-      } catch (err) {
-        setTurretsError(err instanceof Error ? err.message : "Failed to load Turrets deployments");
-      } finally {
-        setTurretsLoading(false);
-      }
-    };
-
-    loadTurretsDeployments();
   }, [publicKey]);
 
   useEffect(() => {
@@ -132,16 +160,10 @@ export default function SettingsPage({
     setConfig(currentConfig);
     if (currentConfig.network === "custom") {
       setCustomUrl(currentConfig.horizonUrl);
-      setCustomRpcUrl(currentConfig.rpcUrl || "");
     }
   }, []);
 
   const handleNetworkChange = (network: "testnet" | "mainnet" | "custom") => {
-    if (network === "custom") {
-      setConfig((current) => ({ ...current, network: "custom" }));
-      setEndpointErrors({ horizon: "", rpc: "" });
-      return;
-    }
     if (network === "mainnet" && config.network !== "mainnet") {
       setPendingNetwork(network);
       setShowMainnetWarning(true);
@@ -151,156 +173,6 @@ export default function SettingsPage({
     applyNetworkChange(network);
   };
 
-  const refreshTurretsDeployments = async () => {
-    if (!publicKey) return;
-    setTurretsLoading(true);
-    setTurretsError(null);
-
-    try {
-      const data = await listTurretsFunctions(publicKey);
-      setDeployments(data);
-    } catch (err) {
-      setTurretsError(err instanceof Error ? err.message : "Failed to refresh Turrets deployments");
-    } finally {
-      setTurretsLoading(false);
-    }
-  };
-
-  const handleTurretsAction = async (type: "dca" | "stop_loss") => {
-    if (!publicKey) {
-      setTurretsError("Connect your wallet before deploying a Turrets function.");
-      return;
-    }
-
-    setTurretsLoading(true);
-    setTurretsError(null);
-    setTurretsSuccess(null);
-
-    try {
-      const config =
-        type === "dca"
-          ? {
-              amountQuote: Number(dcaForm.amountQuote),
-              intervalMinutes: Number(dcaForm.intervalMinutes),
-              quoteAssetCode: dcaForm.quoteAssetCode.trim().toUpperCase(),
-              quoteAssetIssuer: dcaForm.quoteAssetIssuer.trim(),
-            }
-          : {
-              thresholdPrice: Number(stopLossForm.thresholdPrice),
-              amountSell: Number(stopLossForm.amountSell),
-              sellAssetCode: stopLossForm.sellAssetCode.trim().toUpperCase(),
-              sellAssetIssuer: stopLossForm.sellAssetIssuer.trim(),
-              cooldownMinutes: Number(stopLossForm.cooldownMinutes),
-            };
-
-      const { challengeXDR, deploymentHash } = await createTurretsChallenge({
-        ownerPublicKey: publicKey,
-        type,
-        config,
-      });
-
-      const { signedXDR, error } = await signTransactionWithWallet(challengeXDR);
-      if (error || !signedXDR) {
-        throw new Error(error || "Failed to sign Turrets challenge");
-      }
-
-      const deployment = await deployTurretsFunction({
-        ownerPublicKey: publicKey,
-        type,
-        config,
-        deploymentHash,
-        signedChallengeXDR: signedXDR,
-      });
-
-      setTurretsSuccess(
-        `Turrets ${type === "dca" ? "DCA" : "stop-loss"} function deployed successfully.`
-      );
-      setDeployments((prev) => [deployment, ...prev]);
-    } catch (err) {
-      setTurretsError(err instanceof Error ? err.message : "Failed to deploy Turrets function");
-    } finally {
-      setTurretsLoading(false);
-    }
-  };
-
-  const handleToggleDeployment = async (deployment: TurretsDeployment) => {
-    if (!publicKey) {
-      setTurretsError("Connect your wallet to manage Turrets deployments.");
-      return;
-    }
-
-    setTurretsLoading(true);
-    setTurretsError(null);
-
-    try {
-      const updated =
-        deployment.status === "active"
-          ? await pauseTurretsFunction(deployment.id)
-          : await resumeTurretsFunction(deployment.id);
-      setDeployments((prev) => prev.map((item) => (item.id === deployment.id ? updated : item)));
-    } catch (err) {
-      setTurretsError(err instanceof Error ? err.message : "Failed to update deployment status");
-    } finally {
-      setTurretsLoading(false);
-    }
-  };
-
-  const validateEndpoint = (value: string, label: string, required = true) => {
-    if (!value.trim()) return required ? `${label} URL is required.` : "";
-    try {
-      const url = new URL(value.trim());
-      if (url.protocol !== "https:") return `${label} URL must use HTTPS.`;
-      if (!url.hostname) return `${label} URL must include a hostname.`;
-    } catch {
-      return `${label} URL is invalid.`;
-    }
-    return "";
-  };
-
-  const endpointNetwork = (value: string) => {
-    try {
-      const hostname = new URL(value).hostname.toLowerCase();
-      if (hostname.includes("testnet")) return "testnet";
-      if (hostname.includes("mainnet")) return "mainnet";
-    } catch {
-      return null;
-    }
-    return null;
-  };
-
-  const handleCustomEndpointsBlur = () => {
-    const horizonError = validateEndpoint(customUrl, "Horizon");
-    const rpcError = validateEndpoint(customRpcUrl, "RPC", false);
-    const horizonNetwork = endpointNetwork(customUrl);
-    const rpcNetwork = endpointNetwork(customRpcUrl);
-    const networkError =
-      !horizonError && !rpcError && horizonNetwork && rpcNetwork && horizonNetwork !== rpcNetwork
-        ? "RPC URL must use the same network as the Horizon URL."
-        : "";
-    const errors = { horizon: horizonError, rpc: rpcError || networkError };
-    setEndpointErrors(errors);
-    if (errors.horizon) {
-      customHorizonRef.current?.focus();
-      return;
-    }
-    if (errors.rpc) {
-      customRpcRef.current?.focus();
-      return;
-    }
-
-    const newConfig: NetworkConfig = {
-      network: "custom",
-      horizonUrl: customUrl.trim(),
-      ...(customRpcUrl.trim() ? { rpcUrl: customRpcUrl.trim() } : {}),
-    };
-    setNetworkConfig(newConfig);
-    setConfig(newConfig);
-    if (publicKey) {
-      disconnectWallet();
-      onDisconnect();
-    }
-  };
-
   const applyNetworkChange = (network: "testnet" | "mainnet" | "custom") => {
     let horizonUrl: string;
     if (network === "testnet") {
@@ -308,8 +180,8 @@ export default function SettingsPage({
     } else if (network === "mainnet") {
       horizonUrl = "https://horizon.stellar.org";
     } else {
-      handleCustomEndpointsBlur();
-      return;
+      horizonUrl = customUrl.trim();
+      if (!horizonUrl) return; // Don't allow empty custom URL
     }
 
     const newConfig: NetworkConfig = { network, horizonUrl };
@@ -319,17 +191,32 @@ export default function SettingsPage({
     // Disconnect wallet to force reconnect on new network
     if (publicKey) {
       disconnectWallet();
-      onDisconnect();
+      disconnectCurrentWallet();
     }
 
     setShowMainnetWarning(false);
     setPendingNetwork(null);
   };
 
+  const handleCustomUrlChange = (url: string) => {
+    setCustomUrl(url);
+    if (config.network === "custom") {
+      const newConfig: NetworkConfig = { network: "custom", horizonUrl: url };
+      setNetworkConfig(newConfig);
+      setConfig(newConfig);
+
+      // Disconnect wallet on URL change
+      if (publicKey) {
+        disconnectWallet();
+        disconnectCurrentWallet();
+      }
+    }
+  };
+
   // Username registration handler
   const handleRegisterUsername = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!username.trim() || !publicKey) {
       setUsernameError("Username and wallet connection required");
       return;
@@ -397,126 +284,6 @@ export default function SettingsPage({
             </div>
 
             <div className="bg-white dark:bg-cosmos-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
-              <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-1">
-                Appearance
-              </h2>
-              <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">
-                Control how the app looks. Enable auto dark mode to switch automatically based on the time of day.
-              </p>
-
-              {/* Manual toggle row */}
-              <div className="flex items-center justify-between py-3 border-b border-slate-100 dark:border-slate-700">
-                <div>
-                  <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
-                    Dark mode
-                  </p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    {schedule.autoEnabled
-                      ? "Managed by schedule – click to override for this session"
-                      : "Toggle manually"}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={toggleTheme}
-                  aria-pressed={theme === "dark"}
-                  aria-label="Toggle dark mode"
-                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-stellar-500 focus:ring-offset-2 dark:focus:ring-offset-cosmos-900 ${
-                    theme === "dark" ? "bg-stellar-500" : "bg-slate-300 dark:bg-slate-600"
-                  }`}
-                >
-                  <span
-                    className={`inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition-transform duration-200 ${
-                      theme === "dark" ? "translate-x-5" : "translate-x-0"
-                    }`}
-                  />
-                </button>
-              </div>
-
-              {/* Auto schedule toggle */}
-              <div className="flex items-center justify-between py-3 border-b border-slate-100 dark:border-slate-700">
-                <div>
-                  <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
-                    Auto dark mode at night
-                  </p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    Automatically switch to dark mode during configured hours
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setSchedule({ autoEnabled: !schedule.autoEnabled })
-                  }
-                  aria-pressed={schedule.autoEnabled}
-                  aria-label="Toggle automatic dark mode schedule"
-                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-stellar-500 focus:ring-offset-2 dark:focus:ring-offset-cosmos-900 ${
-                    schedule.autoEnabled
-                      ? "bg-stellar-500"
-                      : "bg-slate-300 dark:bg-slate-600"
-                  }`}
-                >
-                  <span
-                    className={`inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition-transform duration-200 ${
-                      schedule.autoEnabled ? "translate-x-5" : "translate-x-0"
-                    }`}
-                  />
-                </button>
-              </div>
-
-              {/* Night window pickers – only shown when auto is enabled */}
-              {schedule.autoEnabled && (
-                <div className="pt-4 space-y-4">
-                  <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">
-                    Night window
-                  </p>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label
-                        htmlFor="night-start"
-                        className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5"
-                      >
-                        Dark mode starts
-                      </label>
-                      <input
-                        id="night-start"
-                        type="time"
-                        value={schedule.nightStart}
-                        onChange={(e) =>
-                          setSchedule({ nightStart: e.target.value })
-                        }
-                        className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-cosmos-900 text-slate-900 dark:text-white focus:ring-2 focus:ring-stellar-500 focus:border-transparent"
-                      />
-                    </div>
-                    <div>
-                      <label
-                        htmlFor="night-end"
-                        className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5"
-                      >
-                        Dark mode ends
-                      </label>
-                      <input
-                        id="night-end"
-                        type="time"
-                        value={schedule.nightEnd}
-                        onChange={(e) =>
-                          setSchedule({ nightEnd: e.target.value })
-                        }
-                        className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-cosmos-900 text-slate-900 dark:text-white focus:ring-2 focus:ring-stellar-500 focus:border-transparent"
-                      />
-                    </div>
-                  </div>
-                  <p className="text-xs text-slate-400 dark:text-slate-500">
-                    Uses your device&apos;s local time. Overnight windows (e.g.{" "}
-                    <span className="font-mono">20:00 – 07:00</span>) are
-                    supported. You can still toggle manually to override for the
-                    current session.
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <div className="bg-white dark:bg-cosmos-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
               <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">
                 Network Configuration
               </h2>
@@ -562,41 +329,19 @@ export default function SettingsPage({
 
                 {config.network === "custom" && (
                   <div>
-                    <label htmlFor="custom-horizon-url" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                       Custom Horizon URL
                     </label>
                     <input
-                      id="custom-horizon-url"
                       type="url"
                       value={customUrl}
                       onChange={(e) => setCustomUrl(e.target.value)}
-                      onBlur={handleCustomEndpointsBlur}
-                      ref={customHorizonRef}
-                      aria-invalid={Boolean(endpointErrors.horizon)}
-                      aria-describedby={endpointErrors.horizon ? "custom-horizon-error" : "custom-horizon-help"}
+                      onBlur={() => handleCustomUrlChange(customUrl)}
                       placeholder="https://horizon.example.com"
                       className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-cosmos-900 text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 focus:ring-2 focus:ring-stellar-500 focus:border-transparent"
                     />
-                    <p id={endpointErrors.horizon ? "custom-horizon-error" : "custom-horizon-help"} role={endpointErrors.horizon ? "alert" : undefined} className={`text-xs mt-1 ${endpointErrors.horizon ? "text-red-400" : "text-slate-400 dark:text-slate-400"}`}>
-                      {endpointErrors.horizon || "Enter a custom Horizon server URL. Changes take effect after both endpoints are valid."}
-                    </p>
-                    <label htmlFor="custom-rpc-url" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mt-4 mb-2">
-                      Custom Soroban RPC URL
-                    </label>
-                    <input
-                      id="custom-rpc-url"
-                      type="url"
-                      value={customRpcUrl}
-                      onChange={(e) => setCustomRpcUrl(e.target.value)}
-                      onBlur={handleCustomEndpointsBlur}
-                      ref={customRpcRef}
-                      aria-invalid={Boolean(endpointErrors.rpc)}
-                      aria-describedby={endpointErrors.rpc ? "custom-rpc-error" : "custom-rpc-help"}
-                      placeholder="https://soroban.example.com"
-                      className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-cosmos-900 text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 focus:ring-2 focus:ring-stellar-500 focus:border-transparent"
-                    />
-                    <p id={endpointErrors.rpc ? "custom-rpc-error" : "custom-rpc-help"} role={endpointErrors.rpc ? "alert" : undefined} className={`text-xs mt-1 ${endpointErrors.rpc ? "text-red-400" : "text-slate-400 dark:text-slate-400"}`}>
-                      {endpointErrors.rpc || "Use an RPC endpoint on the same network as Horizon."}
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                      Enter a custom Horizon server URL. Changes take effect immediately.
                     </p>
                   </div>
                 )}
@@ -607,172 +352,6 @@ export default function SettingsPage({
                     <span className="font-mono text-slate-900 dark:text-white">
                       {config.horizonUrl}
                     </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white dark:bg-cosmos-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
-                    Turrets / Server-side Signing
-                  </h2>
-                  <p className="text-sm text-slate-400 dark:text-slate-400 mt-1">
-                    Deploy programmatic txFunctions with Freighter-signed authorization and server-side evaluation.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={refreshTurretsDeployments}
-                  className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition"
-                >
-                  Refresh
-                </button>
-              </div>
-
-              {(turretsError || turretsSuccess) && (
-                <div className="space-y-2 mb-4">
-                  {turretsError && (
-                    <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-lg text-rose-400 text-sm">
-                      {turretsError}
-                    </div>
-                  )}
-                  {turretsSuccess && (
-                    <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-emerald-400 text-sm">
-                      {turretsSuccess}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-4">
-                  <div className="rounded-2xl border border-slate-200 dark:border-slate-700 p-4">
-                    <p className="text-sm font-medium text-slate-900 dark:text-white mb-3">DCA into XLM</p>
-                    <label className="block text-xs text-slate-400 dark:text-slate-400 mb-1">Quote Amount (USD)</label>
-                    <input
-                      type="number"
-                      value={dcaForm.amountQuote}
-                      onChange={(e) => setDcaForm((prev) => ({ ...prev, amountQuote: e.target.value }))}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-cosmos-900 text-slate-900 dark:text-white"
-                    />
-                    <label className="block text-xs text-slate-400 dark:text-slate-400 mt-3 mb-1">Interval (minutes)</label>
-                    <input
-                      type="number"
-                      value={dcaForm.intervalMinutes}
-                      onChange={(e) => setDcaForm((prev) => ({ ...prev, intervalMinutes: e.target.value }))}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-cosmos-900 text-slate-900 dark:text-white"
-                    />
-                    <label className="block text-xs text-slate-400 dark:text-slate-400 mt-3 mb-1">Quote Asset Code</label>
-                    <input
-                      type="text"
-                      value={dcaForm.quoteAssetCode}
-                      onChange={(e) => setDcaForm((prev) => ({ ...prev, quoteAssetCode: e.target.value }))}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-cosmos-900 text-slate-900 dark:text-white"
-                    />
-                    <label className="block text-xs text-slate-400 dark:text-slate-400 mt-3 mb-1">Quote Asset Issuer</label>
-                    <input
-                      type="text"
-                      value={dcaForm.quoteAssetIssuer}
-                      onChange={(e) => setDcaForm((prev) => ({ ...prev, quoteAssetIssuer: e.target.value }))}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-cosmos-900 text-slate-900 dark:text-white"
-                    />
-                    <button
-                      type="button"
-                      disabled={turretsLoading}
-                      onClick={() => handleTurretsAction("dca")}
-                      className="w-full mt-4 px-4 py-2 rounded-lg bg-stellar-500 text-white font-medium hover:bg-stellar-600 disabled:opacity-60"
-                    >
-                      Deploy DCA Function
-                    </button>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-200 dark:border-slate-700 p-4">
-                    <p className="text-sm font-medium text-slate-900 dark:text-white mb-3">Stop-loss Monitor</p>
-                    <label className="block text-xs text-slate-400 dark:text-slate-400 mb-1">Threshold Price (USD)</label>
-                    <input
-                      type="number"
-                      value={stopLossForm.thresholdPrice}
-                      onChange={(e) => setStopLossForm((prev) => ({ ...prev, thresholdPrice: e.target.value }))}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-cosmos-900 text-slate-900 dark:text-white"
-                    />
-                    <label className="block text-xs text-slate-400 dark:text-slate-400 mt-3 mb-1">Amount to Sell</label>
-                    <input
-                      type="number"
-                      value={stopLossForm.amountSell}
-                      onChange={(e) => setStopLossForm((prev) => ({ ...prev, amountSell: e.target.value }))}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-cosmos-900 text-slate-900 dark:text-white"
-                    />
-                    <label className="block text-xs text-slate-400 dark:text-slate-400 mt-3 mb-1">Sell Asset Code</label>
-                    <input
-                      type="text"
-                      value={stopLossForm.sellAssetCode}
-                      onChange={(e) => setStopLossForm((prev) => ({ ...prev, sellAssetCode: e.target.value }))}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-cosmos-900 text-slate-900 dark:text-white"
-                    />
-                    <label className="block text-xs text-slate-400 dark:text-slate-400 mt-3 mb-1">Sell Asset Issuer</label>
-                    <input
-                      type="text"
-                      value={stopLossForm.sellAssetIssuer}
-                      onChange={(e) => setStopLossForm((prev) => ({ ...prev, sellAssetIssuer: e.target.value }))}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-cosmos-900 text-slate-900 dark:text-white"
-                    />
-                    <label className="block text-xs text-slate-400 dark:text-slate-400 mt-3 mb-1">Cooldown (minutes)</label>
-                    <input
-                      type="number"
-                      value={stopLossForm.cooldownMinutes}
-                      onChange={(e) => setStopLossForm((prev) => ({ ...prev, cooldownMinutes: e.target.value }))}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-cosmos-900 text-slate-900 dark:text-white"
-                    />
-                    <button
-                      type="button"
-                      disabled={turretsLoading}
-                      onClick={() => handleTurretsAction("stop_loss")}
-                      className="w-full mt-4 px-4 py-2 rounded-lg bg-stellar-500 text-white font-medium hover:bg-stellar-600 disabled:opacity-60"
-                    >
-                      Deploy Stop-loss Function
-                    </button>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <div className="rounded-2xl border border-slate-200 dark:border-slate-700 p-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <p className="text-sm font-medium text-slate-900 dark:text-white">Deployments</p>
-                      <span className="text-xs text-slate-400 dark:text-slate-400">{deployments.length} active</span>
-                    </div>
-                    {turretsLoading ? (
-                      <p className="text-sm text-slate-400 dark:text-slate-400">Loading deployments...</p>
-                    ) : deployments.length === 0 ? (
-                      <p className="text-sm text-slate-400 dark:text-slate-400">No Turrets functions deployed yet.</p>
-                    ) : (
-                      <div className="space-y-3">
-                        {deployments.map((deployment) => (
-                          <div key={deployment.id} className="rounded-xl border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-cosmos-900">
-                            <div className="flex items-start justify-between gap-2">
-                              <div>
-                                <p className="text-sm font-semibold text-slate-900 dark:text-white">{deployment.type === "dca" ? "DCA" : "Stop-loss"}</p>
-                                <p className="text-xs text-slate-400 dark:text-slate-400">{deployment.id}</p>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => handleToggleDeployment(deployment)}
-                                className="text-xs px-2 py-1 rounded-full border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200"
-                              >
-                                {deployment.status === "active" ? "Pause" : "Resume"}
-                              </button>
-                            </div>
-                            <div className="mt-3 grid gap-2 text-xs text-slate-400 dark:text-slate-400">
-                              <div>Next run: {deployment.nextRunAt || "n/a"}</div>
-                              <div>Last checked: {deployment.lastCheckedAt || "n/a"}</div>
-                              <div>Last executed: {deployment.lastExecutedAt || "n/a"}</div>
-                              {deployment.lastError && <div className="text-rose-400">Error: {deployment.lastError}</div>}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
                   </div>
                 </div>
               </div>
@@ -832,7 +411,7 @@ export default function SettingsPage({
                           {usernameLoading ? "Registering..." : "Register"}
                         </button>
                       </div>
-                      <p className="text-xs text-slate-400 dark:text-slate-400 mt-1">
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                         3-20 characters, letters and numbers only
                       </p>
                     </div>
@@ -860,7 +439,118 @@ export default function SettingsPage({
                   </div>
                 </div>
               </div>
-            ) : (
+            ) : null}
+
+            {/* Price Alerts Section */}
+            {publicKey ? (
+              <div className="bg-white dark:bg-cosmos-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4 flex items-center gap-2">
+                  <svg className="w-5 h-5 text-stellar-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                  </svg>
+                  Price Alerts
+                </h2>
+
+                <form onSubmit={handleCreatePriceAlert} className="space-y-4 mb-6">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                        Asset
+                      </label>
+                      <select
+                        value={priceAlertForm.asset}
+                        onChange={(e) => setPriceAlertForm({ ...priceAlertForm, asset: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-50 dark:bg-cosmos-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white"
+                      >
+                        <option value="XLM">XLM</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                        Direction
+                      </label>
+                      <select
+                        value={priceAlertForm.direction}
+                        onChange={(e) => setPriceAlertForm({ ...priceAlertForm, direction: e.target.value as 'above' | 'below' })}
+                        className="w-full px-3 py-2 bg-slate-50 dark:bg-cosmos-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white"
+                      >
+                        <option value="above">Above</option>
+                        <option value="below">Below</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                        Target Price (USD)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.0000001"
+                        value={priceAlertForm.targetPrice}
+                        onChange={(e) => setPriceAlertForm({ ...priceAlertForm, targetPrice: e.target.value })}
+                        placeholder="0.1234567"
+                        className="w-full px-3 py-2 bg-slate-50 dark:bg-cosmos-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={priceAlertLoading}
+                    className="btn-primary w-full"
+                  >
+                    {priceAlertLoading ? "Creating..." : "Create Alert"}
+                  </button>
+                </form>
+
+                {priceAlertError && (
+                  <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg mb-4">
+                    <p className="text-sm text-red-400">{priceAlertError}</p>
+                  </div>
+                )}
+
+                {priceAlertSuccess && (
+                  <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg mb-4">
+                    <p className="text-sm text-emerald-400">{priceAlertSuccess}</p>
+                  </div>
+                )}
+
+                {priceAlerts.length > 0 && (
+                  <div className="space-y-2">
+                    <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300">Your Alerts</h3>
+                    {priceAlerts.map((alert) => (
+                      <div
+                        key={alert.id}
+                        className="flex items-center justify-between p-3 bg-slate-50 dark:bg-cosmos-900 rounded-lg"
+                      >
+                        <div>
+                          <p className="text-sm font-medium text-slate-900 dark:text-white">
+                            {alert.asset} {alert.direction} ${alert.targetPrice}
+                          </p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">
+                            {alert.triggered ? "Triggered" : "Active"}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => handleDeletePriceAlert(alert.id)}
+                          className="text-red-400 hover:text-red-300 text-sm"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {!('Notification' in window) && (
+                  <div className="mt-4 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                    <p className="text-xs text-amber-400">
+                      Your browser does not support notifications. Alerts will be shown as a banner on the dashboard.
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {publicKey ? null : (
               <div className="bg-white dark:bg-cosmos-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
                 <div className="text-center py-4">
                   <svg className="w-12 h-12 mx-auto text-slate-400 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -872,39 +562,6 @@ export default function SettingsPage({
                 </div>
               </div>
             )}
-
-            {/* ── Your Stellar Name (SNS) ── */}
-            <div className="bg-white dark:bg-cosmos-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
-              <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-1 flex items-center gap-2">
-                <svg className="w-5 h-5 text-stellar-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9" />
-                </svg>
-                Your Stellar Name
-              </h2>
-              <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
-                Register a human-readable name (e.g.{" "}
-                <span className="font-mono text-stellar-400">alice.xlm</span>) that others can use
-                to send you payments instead of your full address.
-              </p>
-
-              <a
-                href="https://xlm.money"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 px-4 py-2 bg-stellar-500 hover:bg-stellar-600 text-white font-medium rounded-lg transition-colors text-sm"
-              >
-                Register your name on xlm.money
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                </svg>
-              </a>
-
-              <p className="mt-3 text-xs text-slate-500 dark:text-slate-500">
-                Already registered? Share your name (e.g.{" "}
-                <span className="font-mono">yourname.xlm</span>) and it will resolve to your Stellar
-                address automatically.
-              </p>
-            </div>
           </div>
         </main>
       </div>

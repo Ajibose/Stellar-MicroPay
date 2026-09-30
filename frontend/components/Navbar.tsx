@@ -19,31 +19,43 @@ import {
 } from "@/lib/wallet";
 import { useWallet } from "@/lib/useWallet";
 import { useTheme } from "@/pages/_app";
-import { useI18n } from "@/contexts/I18nContext";
-import { NavStarIcon, MoonIcon, SunIcon } from "@/components/icons";
+import { copyToClipboard } from "@/utils/format";
 
+const navLinks = [
+  { href: "/", label: "Home" },
+  { href: "/dashboard", label: "Dashboard" },
+  { href: "/trade", label: "Trade" },
+  { href: "/transactions", label: "Transactions" },
+  { href: "/leaderboard", label: "Leaderboard" },
+  { href: "/network", label: "Network" },
+  { href: "/settings", label: "Settings" },
+];
 
-export default function Navbar() {
+export interface NavbarProps {
+  /** Opens the global AI payment assistant (also reachable via Cmd/Ctrl+K). */
+  onOpenAssistant?: () => void;
+}
+
+export default function Navbar({ onOpenAssistant }: NavbarProps) {
   const router = useRouter();
   const { publicKey, connectWallet, disconnectWallet } = useWallet();
   const { theme, toggleTheme } = useTheme();
-  const { locale, setLocale, t, supportedLocales } = useI18n();
-
-  const navLinks = [
-    { href: "/", label: t("home") },
-    { href: "/dashboard", label: t("dashboard") },
-    { href: "/trade", label: t("trade") },
-    { href: "/transactions", label: t("transactions") },
-    { href: "/network", label: t("network") },
-    { href: "/settings", label: t("settings") },
-  ];
-
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [feeLevel, setFeeLevel] = useState<FeeLevel | null>(null);
+
+  const handleCopyAddress = async () => {
+    if (!publicKey) return;
+    const ok = await copyToClipboard(publicKey);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
   const config = getNetworkConfig();
   const isMainnet = config.network === "mainnet";
   const networkLabel =
-    config.network === "custom" ? t("custom") : isMainnet ? t("mainnet") : t("testnet");
+    config.network === "custom" ? "Custom" : isMainnet ? "Mainnet" : "Testnet";
   const networkBadgeClassName =
     config.network === "custom"
       ? "border-purple-400/35 bg-purple-400/10 text-purple-300"
@@ -106,14 +118,14 @@ export default function Navbar() {
 
   return (
     <nav className="sticky top-0 z-50 border-b border-[rgba(14,165,233,0.12)] bg-white/80 backdrop-blur-xl transition-colors duration-300 dark:bg-cosmos-900/80">
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
-        <div className="flex items-center gap-4">
-          <Link href="/" className="group flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-stellar-500/30 bg-stellar-500/20 transition-colors group-hover:border-stellar-500/60">
-              <NavStarIcon className="h-4 w-4 text-stellar-400" />
+      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-2 px-4 sm:px-6">
+        <div className="flex min-w-0 items-center gap-4">
+          <Link href="/" className="group flex min-w-0 items-center gap-2">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-stellar-500/30 bg-stellar-500/20 transition-colors group-hover:border-stellar-500/60">
+              <StarIcon className="h-4 w-4 text-stellar-400" />
             </div>
-            <span className="font-display font-semibold tracking-tight text-slate-900 dark:text-white">
-              {t("stellar_micropay")}
+            <span className="truncate font-display font-semibold tracking-tight text-slate-900 dark:text-white">
+              Stellar<span className="text-stellar-400">MicroPay</span>
             </span>
           </Link>
 
@@ -128,8 +140,8 @@ export default function Navbar() {
 
           {feeLevel && (
             <span
-              title={t("network_title", { level: feeLevel.charAt(0).toUpperCase() + feeLevel.slice(1) })}
-              aria-label={t("network_aria", { level: feeLevel })}
+              title={`Network: ${feeLevel.charAt(0).toUpperCase()}${feeLevel.slice(1)}`}
+              aria-label={`Network fee status: ${feeLevel}`}
               className={clsx(
                 "hidden h-2.5 w-2.5 rounded-full border transition-colors md:inline-block",
                 feeLevel === "normal" && "border-emerald-400/50 bg-emerald-400",
@@ -140,125 +152,92 @@ export default function Navbar() {
           )}
 
           <div className="hidden items-center gap-1 md:flex">
-            <Link
-              href="/"
-              className={clsx(
-                "rounded-lg px-4 py-2 text-sm font-medium transition-all duration-150",
-                router.pathname === "/"
-                  ? "bg-stellar-500/15 text-stellar-300"
-                  : "text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-slate-200"
-              )}
-            >
-              {t.nav.home}
-            </Link>
-            <Link
-              href="/dashboard"
-              className={clsx(
-                "rounded-lg px-4 py-2 text-sm font-medium transition-all duration-150",
-                router.pathname === "/dashboard"
-                  ? "bg-stellar-500/15 text-stellar-300"
-                  : "text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-slate-200"
-              )}
-            >
-              {t.nav.dashboard}
-            </Link>
-            <Link
-              href="/trade"
-              className={clsx(
-                "rounded-lg px-4 py-2 text-sm font-medium transition-all duration-150",
-                router.pathname === "/trade"
-                  ? "bg-stellar-500/15 text-stellar-300"
-                  : "text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-slate-200"
-              )}
-            >
-              {t.nav.trade}
-            </Link>
-            <Link
-              href="/transactions"
-              className={clsx(
-                "rounded-lg px-4 py-2 text-sm font-medium transition-all duration-150",
-                router.pathname === "/transactions"
-                  ? "bg-stellar-500/15 text-stellar-300"
-                  : "text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-slate-200"
-              )}
-            >
-              {t.nav.transactions}
-            </Link>
-            <Link
-              href="/network"
-              className={clsx(
-                "rounded-lg px-4 py-2 text-sm font-medium transition-all duration-150",
-                router.pathname === "/network"
-                  ? "bg-stellar-500/15 text-stellar-300"
-                  : "text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-slate-200"
-              )}
-            >
-              {t.nav.network}
-            </Link>
-            <Link
-              href="/settings"
-              className={clsx(
-                "rounded-lg px-4 py-2 text-sm font-medium transition-all duration-150",
-                router.pathname === "/settings"
-                  ? "bg-stellar-500/15 text-stellar-300"
-                  : "text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-slate-200"
-              )}
-            >
-              {t.nav.settings}
-            </Link>
+            {navLinks.map((link) => (
+              <Link
+                key={link.href}
+                href={link.href}
+                className={clsx(
+                  "rounded-lg px-4 py-2 text-sm font-medium transition-all duration-150",
+                  router.pathname === link.href
+                    ? "bg-stellar-500/15 text-stellar-300"
+                    : "text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-slate-200"
+                )}
+              >
+                {link.label}
+              </Link>
+            ))}
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          {/* Language Switcher */}
-          <div className="relative">
-            <select
-              value={locale}
-              onChange={(e) => setLocale(e.target.value as any)}
-              className="h-9 rounded-lg border border-slate-300/30 bg-white/90 px-3 py-1 text-sm font-medium text-slate-700 shadow-sm transition-all duration-200 hover:bg-slate-100 dark:border-slate-700/50 dark:bg-cosmos-800/80 dark:text-slate-100 dark:hover:bg-cosmos-700/90"
-              aria-label="Select language"
+        <div className="flex min-w-0 shrink-0 items-center gap-2 sm:gap-3">
+          {onOpenAssistant && (
+            <button
+              onClick={onOpenAssistant}
+              title="Open AI payment assistant (Cmd+K / Ctrl+K)"
+              aria-label="Open AI payment assistant. Keyboard shortcut: Command K on Mac, Control K on Windows and Linux."
+              className="hidden h-9 items-center gap-1.5 rounded-lg border border-stellar-500/20 bg-stellar-500/5 px-3 text-xs font-medium text-stellar-400 transition-colors hover:bg-stellar-500/10 sm:inline-flex"
             >
-              {supportedLocales.map((loc) => (
-                <option key={loc} value={loc}>
-                  {loc.toUpperCase()}
-                </option>
-              ))}
-            </select>
-          </div>
+              <SparkleIcon className="h-3.5 w-3.5" />
+              Ask AI
+              <kbd className="ml-1 hidden select-none rounded border border-stellar-500/20 bg-stellar-500/10 px-1 py-0.5 font-mono text-[10px] md:inline">
+                &#8984;K
+              </kbd>
+            </button>
+          )}
 
           <button
             onClick={toggleTheme}
             aria-label={
-              theme === "dark" ? t("switch_light") : t("switch_dark")
+              theme === "dark" ? "Switch to light mode" : "Switch to dark mode"
             }
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300/30 bg-white/90 text-slate-700 shadow-sm transition-all duration-200 hover:bg-slate-100 dark:border-slate-700/50 dark:bg-cosmos-800/80 dark:text-slate-100 dark:hover:bg-cosmos-700/90"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-300/30 bg-white/90 text-slate-700 shadow-sm transition-all duration-200 hover:bg-slate-100 dark:border-slate-700/50 dark:bg-cosmos-800/80 dark:text-slate-100 dark:hover:bg-cosmos-700/90"
           >
             {theme === "dark" ? <MoonIcon /> : <SunIcon />}
           </button>
 
           {publicKey ? (
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 items-center gap-2">
               <kbd
-                title={t("quick_send")}
+                title="Press Ctrl+K / Cmd+K to quick-send"
                 className="hidden select-none items-center gap-1 rounded-md border border-stellar-500/20 bg-stellar-500/5 px-2 py-1 font-mono text-xs text-stellar-400 md:inline-flex"
               >
                 Ctrl+K
               </kbd>
 
-              <div className="address-pill flex items-center gap-2">
+              <div className="address-pill relative flex items-center gap-1.5">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
                 <span>{shortenAddress(publicKey)}</span>
+                <button
+                  onClick={handleCopyAddress}
+                  aria-label="Copy wallet address"
+                  title="Copy wallet address"
+                  className="flex items-center justify-center p-0.5 text-slate-400 hover:text-white transition-colors cursor-pointer rounded"
+                >
+                  {copied ? (
+                    <CheckIcon className="h-3.5 w-3.5 text-emerald-400" />
+                  ) : (
+                    <ClipboardIcon className="h-3.5 w-3.5" />
+                  )}
+                </button>
+                {copied && (
+                  <span
+                    className="absolute -bottom-8 left-1/2 -translate-x-1/2 rounded bg-slate-800 px-2 py-0.5 text-[10px] font-medium text-emerald-400 border border-emerald-400/20 shadow-md animate-fade-in z-50 whitespace-nowrap"
+                    role="status"
+                  >
+                    Copied!
+                  </span>
+                )}
               </div>
               <button
                 onClick={() => setShowDisconnectConfirm(true)}
-                aria-label={t("disconnect_confirm")}
-                className="px-2 py-1 text-xs text-slate-400 transition-colors hover:text-slate-300"
+                aria-label="Show disconnect confirmation"
+                className="shrink-0 px-2 py-1 text-xs text-slate-500 transition-colors hover:text-slate-300"
               >
-                {t.nav.disconnect}
+                Disconnect
               </button>
               {showDisconnectConfirm && (
                 <div className="flex items-center gap-1 rounded-lg border border-amber-400/30 bg-amber-400/10 px-2 py-1">
-                  <span className="text-[11px] text-amber-300">{t.nav.disconnectConfirm}</span>
+                  <span className="text-[11px] text-amber-300">Disconnect wallet?</span>
                   <button
                     onClick={() => {
                       setShowDisconnectConfirm(false);
@@ -266,20 +245,20 @@ export default function Navbar() {
                     }}
                     className="rounded px-1.5 py-0.5 text-[11px] text-red-300 hover:bg-red-500/20"
                   >
-                    {t.nav.confirm}
+                    Confirm
                   </button>
                   <button
                     onClick={() => setShowDisconnectConfirm(false)}
                     className="rounded px-1.5 py-0.5 text-[11px] text-slate-200 hover:bg-white/10"
                   >
-                    {t.nav.cancel}
+                    Cancel
                   </button>
                 </div>
               )}
             </div>
           ) : (
             <button onClick={handleConnectClick} className="btn-primary px-4 py-2 text-sm">
-              {t.nav.connectWallet}
+              Connect Wallet
             </button>
           )}
         </div>
@@ -288,3 +267,85 @@ export default function Navbar() {
   );
 }
 
+function StarIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path
+        d="M12 2L14.09 8.26L21 9L15.5 14.14L17.18 21L12 17.77L6.82 21L8.5 14.14L3 9L9.91 8.26L12 2Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      className="h-4 w-4"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M21 12.79A9 9 0 1111.21 3a7 7 0 009.79 9.79z"
+      />
+    </svg>
+  );
+}
+
+function SunIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      className="h-4 w-4"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M12 3v1m0 16v1m8.66-9h-1M4.34 12h-1m15.07-6.07-.71.71M6.34 17.66l-.71.71m12.02 0-.71-.71M6.34 6.34l-.71-.71M12 7a5 5 0 100 10A5 5 0 0012 7z"
+      />
+    </svg>
+  );
+}
+
+function ClipboardIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      className={className || "h-3.5 w-3.5"}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M8 5a2 2 0 002 2h4a2 2 0 002-2M8 5a2 2 0 012-2h4a2 2 0 012 2"
+      />
+    </svg>
+  );
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      className={className || "h-3.5 w-3.5"}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+    </svg>
+  );
+}

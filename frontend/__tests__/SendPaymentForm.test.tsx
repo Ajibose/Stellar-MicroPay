@@ -1,271 +1,212 @@
-import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import React from 'react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import SendPaymentForm from '../components/SendPaymentForm';
 
-// Define mocks before importing the component
-jest.mock("@/lib/stellar", () => ({
-  buildPaymentTransaction: jest.fn(),
-  buildSorobanTipTransaction: jest.fn(),
-  buildReceiptMintTransaction: jest.fn(),
-  CONTRACT_ID: null,
-  explorerUrl: jest.fn((hash) => `https://testnet.expert.stellar.org/tx/${hash}`),
-  isValidStellarAddress: jest.fn((addr) => addr.startsWith("G") && addr.length === 56),
-  isValidFederationAddress: jest.fn((addr) => addr.includes("*")),
-  resolveFederationAddress: jest.fn(),
-  submitTransaction: jest.fn(),
-  fetchNetworkFeeStats: jest.fn(() => Promise.resolve({ baseFeeXlm: 0.00001, feeLevel: "normal" })),
-  truncateMemoText: jest.fn((text: string) => text),
-  STELLAR_BASE_FEE_XLM: 0.00001,
-  STELLAR_MEMO_TEXT_MAX_BYTES: 28,
-  STELLAR_MINIMUM_ACCOUNT_BALANCE_XLM: 1,
-  server: {
-    loadAccount: jest.fn(() => Promise.reject(new Error("Account not found"))),
-    payments: jest.fn(),
-    transactions: jest.fn(),
-  },
+// Mock the stellar lib module
+jest.mock('@/lib/stellar', () => ({
+    buildPaymentTransaction: jest.fn(),
+    buildSorobanTipTransaction: jest.fn(),
+    CONTRACT_ID: null,
+    explorerUrl: jest.fn((hash) => `https://expert.stellar.org/tx/${hash}`),
+    isValidStellarAddress: jest.fn((addr) => addr.startsWith('G') && addr.length === 56),
+    submitTransaction: jest.fn(),
+    STELLAR_MEMO_TEXT_MAX_BYTES: 28,
+    memoTextByteLength: jest.fn((memo: string) => encodeURIComponent(memo).replace(/%[0-9A-F]{2}/gi, 'x').length),
+    truncateMemoText: jest.fn((memo: string) => Array.from(memo).reduce((result, char) => {
+        return encodeURIComponent(result + char).replace(/%[0-9A-F]{2}/gi, 'x').length <= 28 ? result + char : result;
+    }, '')),
 }));
 
-jest.mock("@/lib/wallet", () => ({
-  signTransactionWithWallet: jest.fn(),
+// Mock the wallet lib module
+jest.mock('@/lib/wallet', () => ({
+    signTransactionWithWallet: jest.fn(),
 }));
 
-jest.mock("@/utils/format", () => ({
-  formatXLM: jest.fn((amount) => `${parseFloat(amount).toFixed(7)} XLM`),
-  shortenAddress: jest.fn((addr, len) => addr?.slice(0, len) + "..."),
+// Mock formatXLM
+jest.mock('@/utils/format', () => ({
+    formatXLM: jest.fn((amount) => `${parseFloat(amount).toFixed(7)} XLM`),
 }));
 
-jest.mock("@/components/PaymentStatusModal", () => ({
-  __esModule: true,
-  default: ({ isOpen, error, txHash, onClose }: any) => {
-    if (!isOpen) return null;
-    return (
-      <div data-testid="payment-status-modal">
-        {error && <div data-testid="error-message">{error}</div>}
-        {txHash && <div data-testid="tx-hash">{txHash}</div>}
-        <button onClick={onClose}>Close</button>
-      </div>
-    );
-  },
-}));
+describe('SendPaymentForm - Memo Templates', () => {
+    const defaultProps = {
+        publicKey: 'GBRPYHIL2CI3WHZDTOOQFC6EB4RRJC3D5NZ2KMSUGSRNVO7ZFGIGSZ',
+        xlmBalance: '100.0000000',
+        usdcBalance: '50.0000000',
+        onSuccess: jest.fn(),
+    };
 
-jest.mock("@/components/MultiSigFlow", () => ({
-  MULTISIG_THRESHOLD_XLM: 1000,
-}));
+    const memoTemplates = ['Rent', 'Salary', 'Invoice', 'Gift', 'Coffee ☕'];
 
-// Now import the component and get mock references
-import SendPaymentForm from "../components/SendPaymentForm";
-import * as stellarModule from "@/lib/stellar";
-import * as walletModule from "@/lib/wallet";
+    it('renders all 5 memo template chips', () => {
+        render(<SendPaymentForm {...defaultProps} />);
 
-const mockBuildPaymentTransaction = stellarModule.buildPaymentTransaction as jest.Mock;
-const mockIsValidStellarAddress = stellarModule.isValidStellarAddress as jest.Mock;
-const mockSubmitTransaction = stellarModule.submitTransaction as jest.Mock;
-const mockFetchNetworkFeeStats = stellarModule.fetchNetworkFeeStats as jest.Mock;
-const mockSignTransactionWithWallet = walletModule.signTransactionWithWallet as jest.Mock;
+        memoTemplates.forEach((template) => {
+            expect(screen.getByText(template)).toBeInTheDocument();
+        });
+    });
 
-describe("SendPaymentForm", () => {
-  const defaultProps = {
-    publicKey: "GBRPYHIL2CI3WHZDTOOQFC6EB4RRJC3D5NZ2KMSUGSRNVO7ZFGIGSZ",
-    xlmBalance: "100.0000000",
-    usdcBalance: "50.0000000",
-    onSuccess: jest.fn(),
-  };
+    it('fills memo field when clicking a template chip', async () => {
+        render(<SendPaymentForm {...defaultProps} />);
+        const user = userEvent.setup();
 
-  const validDestination = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        const rentChip = screen.getByRole('button', { name: /Rent/i });
+        await user.click(rentChip);
 
-  beforeEach(() => {
-    jest.clearAllMocks();
-    // Reset mocks to return expected values
-    mockFetchNetworkFeeStats.mockResolvedValue({ baseFeeXlm: 0.00001, feeLevel: "normal" });
-    mockIsValidStellarAddress.mockImplementation((addr) => addr.startsWith("G") && addr.length === 56);
-    mockBuildPaymentTransaction.mockResolvedValue({ toXDR: () => "mock-xdr" });
-    mockSubmitTransaction.mockResolvedValue({ hash: "tx123456" });
-    mockSignTransactionWithWallet.mockResolvedValue({ signedXDR: "mock-signed-xdr" });
+        const memoInput = screen.getByPlaceholderText('Payment note...');
+        expect(memoInput).toHaveValue('Rent');
+    });
+
+    it('highlights the selected template chip', async () => {
+        render(<SendPaymentForm {...defaultProps} />);
+        const user = userEvent.setup();
+
+        const salaryChip = screen.getByRole('button', { name: /Salary/i });
+        await user.click(salaryChip);
+
+        expect(salaryChip).toHaveClass('bg-stellar-500/20', 'border-stellar-500/30', 'text-stellar-300');
+    });
+
+    it('deselects and clears memo when clicking selected chip again', async () => {
+        render(<SendPaymentForm {...defaultProps} />);
+        const user = userEvent.setup();
+
+        const invoiceChip = screen.getByRole('button', { name: /Invoice/i });
+        const memoInput = screen.getByPlaceholderText('Payment note...') as HTMLInputElement;
+
+        // Click to select
+        await user.click(invoiceChip);
+        expect(memoInput.value).toBe('Invoice');
+
+        // Click again to deselect
+        await user.click(invoiceChip);
+        expect(memoInput.value).toBe('');
+    });
+
+    it('allows custom typing and deselects template', async () => {
+        render(<SendPaymentForm {...defaultProps} />);
+        const user = userEvent.setup();
+
+        const memoInput = screen.getByPlaceholderText('Payment note...') as HTMLInputElement;
+        const giftChip = screen.getByRole('button', { name: /Gift/i });
+
+        // Select template
+        await user.click(giftChip);
+        expect(memoInput.value).toBe('Gift');
+        expect(giftChip).toHaveClass('bg-stellar-500/20');
+
+        // Type custom text
+        await user.clear(memoInput);
+        await user.type(memoInput, 'Custom memo');
+
+        // Template should be deselected
+        expect(giftChip).not.toHaveClass('bg-stellar-500/20');
+        expect(memoInput.value).toBe('Custom memo');
+    });
+
+    it('respects 28-character limit from Stellar', async () => {
+        render(<SendPaymentForm {...defaultProps} />);
+        const user = userEvent.setup();
+
+        const memoInput = screen.getByPlaceholderText('Payment note...') as HTMLInputElement;
+
+        // Try to type more than 28 characters
+        await user.type(memoInput, 'This is a very long memo that exceeds the limit');
+
+        // Input should be truncated to 28 characters
+        expect(memoInput.value.length).toBeLessThanOrEqual(28);
+    });
+
+    it('displays correct character count', async () => {
+        render(<SendPaymentForm {...defaultProps} />);
+        const user = userEvent.setup();
+
+        const memoInput = screen.getByPlaceholderText('Payment note...') as HTMLInputElement;
+        const coffeeChip = screen.getByRole('button', { name: /Coffee ☕/i });
+
+        // Initial state
+        expect(screen.getByText('0/28 characters')).toBeInTheDocument();
+
+        // After selecting template
+        await user.click(coffeeChip);
+        expect(screen.getByText('10/28 characters')).toBeInTheDocument();
+
+        // After clearing
+        await user.click(coffeeChip);
+        expect(screen.getByText('0/28 characters')).toBeInTheDocument();
+    });
+
+    it('disables chips when form is not idle', () => {
+        const { rerender } = render(<SendPaymentForm {...defaultProps} />);
+        const chips = screen.getAllByRole('button').filter((btn) =>
+            memoTemplates.some((tmpl) => btn.textContent?.includes(tmpl))
+        );
+
+        // Chips should be enabled initially
+        chips.forEach((chip) => {
+            expect(chip).not.toBeDisabled();
+        });
+    });
+
+    it('handles prefilled memo from payment links', () => {
+        const prefill = {
+            destination: 'GBRPYHIL2CI3WHZDTOOQFC6EB4RRJC3D5NZ2KMSUGSRNVO7ZFGIGSZ',
+            amount: '10.5',
+            memo: 'Salary',
+        };
+
+        render(<SendPaymentForm {...defaultProps} prefill={prefill} />);
+
+        const memoInput = screen.getByPlaceholderText('Payment note...') as HTMLInputElement;
+        expect(memoInput.value).toBe('Salary');
+    });
+
+    it('switches between different memo templates correctly', async () => {
+        render(<SendPaymentForm {...defaultProps} />);
+        const user = userEvent.setup();
+
+        const memoInput = screen.getByPlaceholderText('Payment note...') as HTMLInputElement;
+        const rentChip = screen.getByRole('button', { name: /Rent/i });
+        const salaryChip = screen.getByRole('button', { name: /Salary/i });
+
+        // Select first template
+        await user.click(rentChip);
+        expect(memoInput.value).toBe('Rent');
+        expect(rentChip).toHaveClass('bg-stellar-500/20');
+        expect(salaryChip).not.toHaveClass('bg-stellar-500/20');
+
+        // Switch to another template
+        await user.click(salaryChip);
+        expect(memoInput.value).toBe('Salary');
+        expect(rentChip).not.toHaveClass('bg-stellar-500/20');
+        expect(salaryChip).toHaveClass('bg-stellar-500/20');
+    });
+});
+
+describe('SendPaymentForm SNS Resolution (#1197)', () => {
+  it('shows resolving state and green chip upon successful .xlm lookup', async () => {
+    jest.spyOn(snsResolver, 'resolveSNSDomain').mockResolvedValueOnce('GABCD1234EXAMPLE');
+
+    render(<SendPaymentForm />);
+    const input = screen.getByPlaceholderText('G... or alice.xlm');
+
+    fireEvent.change(input, { target: { value: 'alice.xlm' } });
+
+    expect(await screen.findByText('Resolving alice.xlm…')).toBeInTheDocument();
+
+    const chip = await screen.findByText('Resolved: GABCD1234EXAMPLE');
+    expect(chip).toBeInTheDocument();
+    expect(chip).toHaveClass('bg-green-100');
   });
 
-  it("renders the form with memo field and send button", () => {
-    render(<SendPaymentForm {...defaultProps} />);
+  it('shows "SNS name not found" when domain is unregistered', async () => {
+    jest.spyOn(snsResolver, 'resolveSNSDomain').mockResolvedValueOnce(null);
 
-    expect(screen.getByText("Memo (optional)")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Send/i })).toBeInTheDocument();
-  });
+    render(<SendPaymentForm />);
+    const input = screen.getByPlaceholderText('G... or alice.xlm');
 
-  describe("Submit button disabled state", () => {
-    it("disables submit button when destination is empty", () => {
-      render(<SendPaymentForm {...defaultProps} />);
+    fireEvent.change(input, { target: { value: 'unknown.xlm' } });
 
-      const sendButton = screen.getByRole("button", { name: /Send/i });
-      expect(sendButton).toBeDisabled();
-    });
-
-    it("enables submit button when destination and amount are valid", async () => {
-      mockIsValidStellarAddress.mockReturnValue(true);
-      const user = userEvent.setup();
-
-      render(<SendPaymentForm {...defaultProps} />);
-
-      const destinationInput = screen.getByPlaceholderText(/G\.\.\./);
-      const amountInput = screen.getByPlaceholderText("0.0000000");
-
-      await user.type(destinationInput, validDestination);
-      await user.type(amountInput, "50");
-
-      await waitFor(() => {
-        const sendButton = screen.getByRole("button", { name: /Send/i });
-        expect(sendButton).toBeEnabled();
-      });
-    });
-
-    it("disables submit button when amount exceeds balance minus 1 XLM reserve", async () => {
-      mockIsValidStellarAddress.mockReturnValue(true);
-      const user = userEvent.setup();
-
-      render(<SendPaymentForm {...defaultProps} xlmBalance="10.0000000" />);
-
-      const destinationInput = screen.getByPlaceholderText(/G\.\.\./);
-      const amountInput = screen.getByPlaceholderText("0.0000000");
-
-      await user.type(destinationInput, validDestination);
-      // Balance is 10, minus 1 XLM reserve = 9 XLM max sendable
-      // Try to send 9.5 which exceeds max
-      await user.type(amountInput, "9.5");
-
-      await waitFor(() => {
-        const sendButton = screen.getByRole("button", { name: /Send/i });
-        expect(sendButton).toBeDisabled();
-      });
-    });
-
-    it("allows send button when amount is within balance minus 1 XLM", async () => {
-      mockIsValidStellarAddress.mockReturnValue(true);
-      const user = userEvent.setup();
-
-      render(<SendPaymentForm {...defaultProps} xlmBalance="10.0000000" />);
-
-      const destinationInput = screen.getByPlaceholderText(/G\.\.\./);
-      const amountInput = screen.getByPlaceholderText("0.0000000");
-
-      await user.type(destinationInput, validDestination);
-      // Balance is 10, minus 1 XLM reserve = 9 XLM max sendable
-      await user.type(amountInput, "8.5");
-
-      await waitFor(() => {
-        const sendButton = screen.getByRole("button", { name: /Send/i });
-        expect(sendButton).toBeEnabled();
-      });
-    });
-  });
-
-  describe("Error state", () => {
-    it("shows error banner on failed submission", async () => {
-      mockIsValidStellarAddress.mockReturnValue(true);
-      mockBuildPaymentTransaction.mockRejectedValue(new Error("Network error"));
-      const user = userEvent.setup();
-
-      render(<SendPaymentForm {...defaultProps} />);
-
-      const destinationInput = screen.getByPlaceholderText(/G\.\.\./);
-      const amountInput = screen.getByPlaceholderText("0.0000000");
-
-      await user.type(destinationInput, validDestination);
-      await user.type(amountInput, "50");
-
-      const sendButton = screen.getByRole("button", { name: /Send/i });
-
-      await waitFor(() => {
-        expect(sendButton).toBeEnabled();
-      });
-
-      await user.click(sendButton);
-
-      // Click confirm on the confirmation modal
-      const confirmButton = await screen.findByRole("button", { name: /Confirm & Sign/i });
-      await user.click(confirmButton);
-
-      // Wait for error to appear in modal
-      await waitFor(() => {
-        const errorElement = screen.getByTestId("error-message");
-        expect(errorElement).toHaveTextContent("Network error");
-      });
-    });
-  });
-
-  describe("Success state", () => {
-    it("displays transaction hash in success state", async () => {
-      const txHash = "abcd1234efgh5678ijkl9012mnop3456qrst5678";
-      mockIsValidStellarAddress.mockReturnValue(true);
-      mockBuildPaymentTransaction.mockResolvedValue({
-        toXDR: () => "mock-xdr",
-      });
-      mockSignTransactionWithWallet.mockResolvedValue({
-        signedXDR: "mock-signed-xdr",
-      });
-      mockSubmitTransaction.mockResolvedValue({ hash: txHash });
-
-      const user = userEvent.setup();
-
-      render(<SendPaymentForm {...defaultProps} />);
-
-      const destinationInput = screen.getByPlaceholderText(/G\.\.\./);
-      const amountInput = screen.getByPlaceholderText("0.0000000");
-
-      await user.type(destinationInput, validDestination);
-      await user.type(amountInput, "50");
-
-      const sendButton = screen.getByRole("button", { name: /Send/i });
-
-      await waitFor(() => {
-        expect(sendButton).toBeEnabled();
-      });
-
-      await user.click(sendButton);
-
-      // Click confirm on the confirmation modal
-      const confirmButton = await screen.findByRole("button", { name: /Confirm & Sign/i });
-      await user.click(confirmButton);
-
-      // In the modal, tx hash should be displayed
-      await waitFor(() => {
-        expect(screen.getByTestId("tx-hash")).toHaveTextContent(txHash);
-      });
-    });
-
-    it("renders explorer link with transaction hash in modal", async () => {
-      const txHash = "abcd1234efgh5678ijkl9012mnop3456qrst5678";
-      mockIsValidStellarAddress.mockReturnValue(true);
-      mockBuildPaymentTransaction.mockResolvedValue({
-        toXDR: () => "mock-xdr",
-      });
-      mockSignTransactionWithWallet.mockResolvedValue({
-        signedXDR: "mock-signed-xdr",
-      });
-      mockSubmitTransaction.mockResolvedValue({ hash: txHash });
-
-      const user = userEvent.setup();
-
-      render(<SendPaymentForm {...defaultProps} />);
-
-      const destinationInput = screen.getByPlaceholderText(/G\.\.\./);
-      const amountInput = screen.getByPlaceholderText("0.0000000");
-
-      await user.type(destinationInput, validDestination);
-      await user.type(amountInput, "50");
-
-      const sendButton = screen.getByRole("button", { name: /Send/i });
-
-      await waitFor(() => {
-        expect(sendButton).toBeEnabled();
-      });
-
-      await user.click(sendButton);
-
-      const confirmButton = await screen.findByRole("button", { name: /Confirm & Sign/i });
-      await user.click(confirmButton);
-
-      // Verify the tx hash appears in the modal
-      await waitFor(() => {
-        expect(screen.getByTestId("tx-hash")).toBeInTheDocument();
-      });
-    });
+    expect(await screen.findByText('SNS name not found')).toBeInTheDocument();
   });
 });

@@ -47,7 +47,7 @@ export default function Trade() {
     try {
       const endTime = new Date();
       const startTime = new Date(endTime.getTime() - 24 * 60 * 60 * 1000); // 24 hours ago
-      
+
       const data = await fetchTradeAggregations(
         USDC,
         Asset.native(),
@@ -80,23 +80,20 @@ export default function Trade() {
     try {
       const transaction = await buildCancelOfferTransaction({
         fromPublicKey: publicKey,
-        offerId: String(offer.id),
+        offerId: offer.id,
         selling: offer.selling,
         buying: offer.buying,
       });
 
       // Sign with Freighter
       const { signTransaction } = await import("@stellar/freighter-api");
-      const signed = await signTransaction(transaction.toXDR(), {
+      const signedXDR = await signTransaction(transaction.toXDR(), {
         networkPassphrase: NETWORK_PASSPHRASE,
       });
-      if (signed.error) {
-        throw new Error(signed.error.message || "Transaction signing failed");
-      }
 
       // Submit transaction
-      await submitTransaction(signed.signedTxXdr);
-      
+      await submitTransaction(signedXDR);
+
       showToast("Offer cancelled successfully!", "success");
       loadOpenOffers(); // Reload offers
     } catch (error) {
@@ -211,7 +208,7 @@ export default function Trade() {
           <div>
             <div className="card">
               <h2 className="text-xl font-semibold text-white mb-4">Orderbook (USDC/XLM)</h2>
-              
+
               {orderbook ? (
                 <div className="space-y-4">
                   {/* Asks (Sell Orders) */}
@@ -253,7 +250,7 @@ export default function Trade() {
                   </div>
                 </div>
               ) : (
-                <div className="text-center py-8 text-slate-400">
+                <div className="text-center py-8 text-slate-500">
                   Loading orderbook...
                 </div>
               )}
@@ -266,7 +263,7 @@ export default function Trade() {
       {activeTab === "orders" && (
         <div className="card">
           <h2 className="text-xl font-semibold text-white mb-4">Your Open Orders</h2>
-          
+
           {openOffers.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -287,8 +284,8 @@ export default function Trade() {
                       </td>
                       <td className="py-3 px-4 text-sm">
                         <span className={`px-2 py-1 rounded text-xs font-medium ${
-                          offer.selling.isNative() 
-                            ? "bg-red-500/20 text-red-400" 
+                          offer.selling.isNative()
+                            ? "bg-red-500/20 text-red-400"
                             : "bg-emerald-500/20 text-emerald-400"
                         }`}>
                           {offer.selling.isNative() ? "Sell" : "Buy"}
@@ -311,7 +308,7 @@ export default function Trade() {
               </table>
             </div>
           ) : (
-            <div className="text-center py-8 text-slate-400">
+            <div className="text-center py-8 text-slate-500">
               No open orders
             </div>
           )}
@@ -322,7 +319,7 @@ export default function Trade() {
       {activeTab === "history" && (
         <div className="card">
           <h2 className="text-xl font-semibold text-white mb-4">Trade History (24h)</h2>
-          
+
           {tradeHistory.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -351,7 +348,7 @@ export default function Trade() {
               </table>
             </div>
           ) : (
-            <div className="text-center py-8 text-slate-400">
+            <div className="text-center py-8 text-slate-500">
               No trades in the last 24 hours
             </div>
           )}

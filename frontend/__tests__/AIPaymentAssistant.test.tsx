@@ -6,8 +6,7 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
-import AIPaymentAssistant from '../components/AIPaymentAssistant';
-import FloatingAssistantButton from '../components/FloatingAssistantButton';
+import AIPaymentAssistant, { FloatingAssistantButton } from '../components/AIPaymentAssistant';
 
 // Mock fetch for API calls
 global.fetch = jest.fn();
@@ -135,7 +134,7 @@ describe('AIPaymentAssistant', () => {
 describe('FloatingAssistantButton', () => {
   it('renders floating button', () => {
     const mockOnClick = jest.fn();
-    
+
     render(<FloatingAssistantButton onClick={mockOnClick} />);
 
     const button = screen.getByLabelText('Open AI Payment Assistant');
@@ -144,7 +143,7 @@ describe('FloatingAssistantButton', () => {
 
   it('calls onClick when button is clicked', () => {
     const mockOnClick = jest.fn();
-    
+
     render(<FloatingAssistantButton onClick={mockOnClick} />);
 
     const button = screen.getByLabelText('Open AI Payment Assistant');
