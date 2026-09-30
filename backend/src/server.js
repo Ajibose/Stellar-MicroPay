@@ -22,6 +22,8 @@ const turretsRoutes = require("./routes/turrets");
 const tipsRoutes = require("./routes/tips");
 const contactsRoutes = require("./routes/contacts");
 const webhooksRoutes = require("./routes/webhooks");
+const networkRoutes = require("./routes/network");
+const priceAlertsRoutes = require("./routes/priceAlerts");
 const requestId = require("./middleware/requestId");
 const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./swagger");
@@ -65,6 +67,8 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID"],
     exposedHeaders: ["X-Request-ID"],
     credentials: true,
+    optionsSuccessStatus: 204,
+    maxAge: 600,
   })
 );
 
@@ -90,6 +94,8 @@ app.use("/api/turrets", turretsRoutes);
 app.use("/api/tips", tipsRoutes);
 app.use("/api/contacts", contactsRoutes);
 app.use("/api/webhooks", webhooksRoutes);
+app.use("/api/network", networkRoutes);
+app.use("/api/price-alerts", priceAlertsRoutes);
 app.use("/federation", federationRoutes);
 
 // ─── API Documentation ─────────────────────────────────────────────────────────
