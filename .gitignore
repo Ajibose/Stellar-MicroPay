@@ -18,10 +18,7 @@ backend/logs/
 
 # ─── Rust / Cargo ─────────────────────────────────────────────────────────────
 target/
-# Cargo.lock is committed on purpose: the contract is a deployable artifact, so
-# every build — CI, local, release — must resolve the same dependency graph.
-# Leaving it unpinned is what broke the contracts CI job (soroban-sdk's
-# transitive deps drifted into versions that no longer compile).
+Cargo.lock
 
 # ─── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store
@@ -33,9 +30,7 @@ ehthumbs.db
 Thumbs.db
 
 # ─── Editor ───────────────────────────────────────────────────────────────────
-# Ignore personal editor settings but track shared team config
-.vscode/*
-!.vscode/extensions.json
+.vscode/
 .idea/
 *.swp
 *.swo
@@ -54,3 +49,5 @@ test_snapshots
 
 # ─── Local scripts (never push) ───────────────────────────────────────────────
 scripts/create_issues.py
+\n# TypeScript build info\nfrontend/tsconfig.tsbuildinfo
+\n# Codex CI artifacts\n.codex-artifacts/

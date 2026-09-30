@@ -13,18 +13,7 @@ const stellarService = require("../services/stellarService");
 async function getPayments(req, res, next) {
   try {
     const { publicKey } = req.params;
-
-    // #197: explicit validation — || 20 silently swallows limit=0; NaN propagates to Horizon
-    const rawLimit = req.query.limit;
-    let limit = 20;
-    if (rawLimit !== undefined) {
-      const parsed = parseInt(rawLimit, 10);
-      if (isNaN(parsed) || !Number.isSafeInteger(parsed) || parsed < 1) {
-        return res.status(400).json({ error: "limit must be a positive integer" });
-      }
-      limit = Math.min(parsed, 100);
-    }
-
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
     const cursor = req.query.cursor || undefined;
 
     const payments = await stellarService.getPayments(publicKey, { limit, cursor });
@@ -74,4 +63,32 @@ async function getStats(req, res, next) {
   }
 }
 
-module.exports = { getPayments, getStats };
+/**
+ * GET /api/payments/stream-status/:streamId
+ * Returns status of a Soroban streaming payment contract.
+ */
+async function getStreamStatus(req, res, next) {
+  try {
+    const { streamId } = req.params;
+    
+    // Placeholder implementation - in production this would query the Soroban contract
+    // For now, return a mock response structure
+    res.json({
+      success: true,
+      data: {
+        streamId,
+        payer: "GEXAMPLEPAYERADDRESS",
+        recipient: "GEXAMPLERECIPIENTADDRESS",
+        ratePerHour: "10.0000000", // XLM per hour
+        deposit: "100.0000000", // Total XLM deposited
+        claimable: "25.5000000", // XLM available to claim
+        startTime: new Date(Date.now() - 86400000).toISOString(),
+        isActive: true,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { getPayments, getStats, getStreamStatus };

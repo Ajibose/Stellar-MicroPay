@@ -15,7 +15,7 @@
     --color-primary: #0ea5e9;
     --color-primary-glow: rgba(14, 165, 233, 0.3);
     --color-text: #e2e8f0;
-    --color-muted: #94a3b8;
+    --color-muted: #64748b;
     color-scheme: dark;
   }
 
@@ -89,7 +89,7 @@
     }
 
     .label {
-        @apply block text-xs font-medium dark:text-slate-400 text-slate-400 uppercase tracking-wider mb-2;
+        @apply block text-xs font-medium dark:text-slate-400 text-slate-500 uppercase tracking-wider mb-2;
     }
 
     .address-pill {
@@ -257,16 +257,4 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .confetti__piece { animation: none; opacity: 0; }
-}
-
-@keyframes balance-flash {
-  0%   { color: #fff; }
-  30%  { color: #7dd3fc; text-shadow: 0 0 12px rgba(125,211,252,0.6); }
-  100% { color: inherit; text-shadow: none; }
-}
-.balance-flash {
-  animation: balance-flash 0.8s ease-out forwards;
-}
-@media (prefers-reduced-motion: reduce) {
-  .balance-flash { animation: none; }
 }

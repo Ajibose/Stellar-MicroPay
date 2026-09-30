@@ -4,21 +4,23 @@
  */
 
 import type { AppProps } from "next/app";
-import { useState, useEffect } from "react";
+import dynamic from "next/dynamic";
+import { useState, useEffect, createContext, useContext, useCallback } from "react";
+import { useRouter } from "next/router";
 import Head from "next/head";
 import Navbar from "@/components/Navbar";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import QuickSendModal from "@/components/QuickSendModal";
-import { ToastContainer } from "@/components/Toast";
-import { ToastProvider } from "@/lib/ToastContext";
 import { WalletProvider, useWallet } from "@/lib/useWallet";
+
+const AIPaymentAssistant = dynamic(() => import("@/components/AIPaymentAssistant"), {
+  ssr: false,
+});
 import {
   getStellarURIFromURL,
   registerProtocolHandler,
   type URIParseResult,
 } from "@/lib/sep0007";
-import { ThemeProvider } from "@/contexts/ThemeContext";
-// Re-export ThemeContext and useTheme for backward-compat (Navbar still imports from here)
-export { ThemeContext, useTheme } from "@/contexts/ThemeContext";
 import "@/styles/globals.css";
 
 interface BeforeInstallPromptEvent extends Event {
@@ -58,19 +60,19 @@ function InstallBanner() {
 
   return (
     <div className="fixed bottom-4 left-4 right-4 z-50 animate-slide-up sm:left-auto sm:right-4 sm:w-96">
-      <div className="rounded-xl border border-stellar-500/30 bg-white dark:bg-cosmos-800 p-4 shadow-2xl backdrop-blur-sm dark:shadow-2xl">
+      <div className="rounded-xl border border-stellar-500/30 bg-cosmos-800 p-4 shadow-2xl backdrop-blur-sm">
         <div className="flex items-start justify-between gap-3">
           <div className="flex-1">
-            <h3 className="mb-1 text-sm font-display font-semibold text-slate-900 dark:text-white">
+            <h3 className="mb-1 text-sm font-display font-semibold text-white">
               Install MicroPay
             </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
+            <p className="text-xs text-slate-400">
               Add to your home screen for quick access and offline support
             </p>
           </div>
           <button
             onClick={() => setShowBanner(false)}
-            className="cursor-pointer p-1 text-slate-500 transition-colors hover:text-slate-600 dark:text-slate-400 dark:hover:text-slate-300"
+            className="cursor-pointer p-1 text-slate-500 transition-colors hover:text-slate-300"
             aria-label="Dismiss"
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -99,6 +101,18 @@ function InstallBanner() {
   );
 }
 
+interface ThemeContextType {
+  theme: "dark" | "light";
+  toggleTheme: () => void;
+}
+
+export const ThemeContext = createContext<ThemeContextType>({
+  theme: "dark",
+  toggleTheme: () => {},
+});
+
+export const useTheme = () => useContext(ThemeContext);
+
 function AppShell({
   Component,
   pageProps,
@@ -113,18 +127,40 @@ function AppShell({
   setIsQuickSendOpen: (isOpen: boolean) => void;
 }) {
   const { publicKey } = useWallet();
+  const router = useRouter();
+  const [isAssistantOpen, setIsAssistantOpen] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isModifierPressed = event.metaKey || event.ctrlKey;
+      if (!isModifierPressed || event.key.toLowerCase() !== "k") return;
+
+      // Only intercept the browser/OS's own Cmd/Ctrl+K when the assistant
+      // isn't already open — while it's open, AIPaymentAssistant itself
+      // owns Escape-to-close, so there's nothing else to prevent here.
+      event.preventDefault();
+      setIsAssistantOpen((open) => !open);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  const handleAssistantConfirm = useCallback(
+    (intent: { amount: string; recipient: string; memo: string }) => {
+      setIsAssistantOpen(false);
+      void router.push(
+        `/dashboard?to=${encodeURIComponent(intent.recipient)}&amount=${encodeURIComponent(intent.amount)}`
+      );
+    },
+    [router]
+  );
 
   return (
     <>
       <div className="min-h-screen bg-white bg-grid transition-colors duration-300 dark:bg-cosmos-900">
-        <a
-          href="#main-content"
-          className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[9999] focus:rounded-lg focus:bg-stellar-500 focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-white focus:outline-none focus:ring-2 focus:ring-white"
-        >
-          Skip to main content
-        </a>
-        <Navbar />
-        <main id="main-content" tabIndex={-1}>
+        <Navbar onOpenAssistant={() => setIsAssistantOpen(true)} />
+        <main>
           <Component {...pageProps} stellarURI={stellarURI} />
         </main>
         <InstallBanner />
@@ -139,13 +175,33 @@ function AppShell({
           usdcBalance={null}
         />
       )}
+
+      <AIPaymentAssistant
+        isOpen={isAssistantOpen}
+        onClose={() => setIsAssistantOpen(false)}
+        onConfirm={handleAssistantConfirm}
+      />
     </>
   );
 }
 
 export default function App({ Component, pageProps }: AppProps) {
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [stellarURI, setStellarURI] = useState<URIParseResult | null>(null);
   const [isQuickSendOpen, setIsQuickSendOpen] = useState(false);
+
+  useEffect(() => {
+    const saved = localStorage.getItem("stellar-micropay:theme") as
+      | "dark"
+      | "light"
+      | null;
+    const preferred =
+      saved ??
+      (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+
+    setTheme(preferred);
+    document.documentElement.classList.toggle("dark", preferred === "dark");
+  }, []);
 
   useEffect(() => {
     const uriResult = getStellarURIFromURL();
@@ -176,9 +232,15 @@ export default function App({ Component, pageProps }: AppProps) {
     return () => window.removeEventListener("load", registerWorker);
   }, []);
 
+  const toggleTheme = () => {
+    const nextTheme = theme === "dark" ? "light" : "dark";
+    setTheme(nextTheme);
+    document.documentElement.classList.toggle("dark", nextTheme === "dark");
+    localStorage.setItem("stellar-micropay:theme", nextTheme);
+  };
+
   return (
-    <ThemeProvider>
-      <ToastProvider>
+    <ThemeContext.Provider value={{ theme, toggleTheme }}>
       <WalletProvider>
         <Head>
           <title>Stellar-MicroPay | Instant Micropayments</title>
@@ -218,16 +280,16 @@ export default function App({ Component, pageProps }: AppProps) {
           />
         </Head>
 
-        <AppShell
-          Component={Component}
-          pageProps={pageProps}
-          stellarURI={stellarURI}
-          isQuickSendOpen={isQuickSendOpen}
-          setIsQuickSendOpen={setIsQuickSendOpen}
-        />
-        <ToastContainer />
+        <ErrorBoundary>
+          <AppShell
+            Component={Component}
+            pageProps={pageProps}
+            stellarURI={stellarURI}
+            isQuickSendOpen={isQuickSendOpen}
+            setIsQuickSendOpen={setIsQuickSendOpen}
+          />
+        </ErrorBoundary>
       </WalletProvider>
-      </ToastProvider>
-    </ThemeProvider>
+    </ThemeContext.Provider>
   );
 }

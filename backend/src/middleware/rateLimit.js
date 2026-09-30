@@ -9,10 +9,7 @@ const rateLimit = require("express-rate-limit");
 
 /**
  * Strict rate limiting — 20 requests per minute.
- * Applied to Turrets txFunctions routes.
- *
- * standardHeaders: true  → emits RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset.
- * legacyHeaders: false   → suppresses deprecated X-RateLimit-* headers.
+ * Applied to sensitive lookups like accounts and payments.
  */
 const strictLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
@@ -23,16 +20,25 @@ const strictLimiter = rateLimit({
 });
 
 /**
- * Sensitive route limiting — 10 requests per minute (#205).
- * Applied to account lookup and balance endpoints that could be used for
- * account enumeration.
+ * Authentication challenge requests — 5 requests per minute per IP.
  */
-const sensitiveLimiter = rateLimit({
+const authChallengeLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 10,
+  max: 5,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: "Too many requests to this endpoint, please wait 1 minute." },
+  message: { error: "Too many authentication challenge requests, please wait 1 minute." },
 });
 
-module.exports = { strictLimiter, sensitiveLimiter };
+/**
+ * Authentication verification requests — 5 requests per minute per IP.
+ */
+const authVerifyLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many authentication verification requests, please wait 1 minute." },
+});
+
+module.exports = { strictLimiter, authChallengeLimiter, authVerifyLimiter };

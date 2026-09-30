@@ -5,7 +5,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { formatXLM, shortenAddress, formatUSD, exportTipsToCSV } from "@/utils/format";
+import { formatXLM, shortenAddress, formatUSD } from "@/utils/format";
 
 interface TipRecord {
   id: number;
@@ -50,18 +50,18 @@ export default function CreatorTipsDashboard({
 
     try {
       const apiBase = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "";
-      
+
       // Fetch tips received
       const tipsResponse = await fetch(
         `${apiBase}/api/tips/received/${encodeURIComponent(publicKey)}?limit=${pageSize}&offset=${page * pageSize}`
       );
-      
+
       if (!tipsResponse.ok) {
         throw new Error("Failed to load tips");
       }
-      
+
       const tipsPayload = await tipsResponse.json();
-      
+
       if (tipsPayload?.success) {
         setTips(tipsPayload.data.tips || []);
         setStats(tipsPayload.data.stats || null);
@@ -79,7 +79,8 @@ export default function CreatorTipsDashboard({
 
   useEffect(() => {
     fetchTips();
-  }, [fetchTips, page]);
+  }, [fetchTips]);
+
 
   const formatTimestamp = (timestamp: string) => {
     const date = new Date(timestamp);
@@ -127,7 +128,7 @@ export default function CreatorTipsDashboard({
       {/* Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="card bg-gradient-to-br from-stellar-500/10 to-transparent border-stellar-500/20">
-          <p className="text-xs uppercase tracking-[0.2em] text-slate-400 mb-1">
+          <p className="text-xs uppercase tracking-[0.2em] text-slate-500 mb-1">
             Total Tips Received
           </p>
           <p className="font-display text-2xl font-bold text-white">
@@ -136,7 +137,7 @@ export default function CreatorTipsDashboard({
         </div>
 
         <div className="card bg-gradient-to-br from-emerald-500/10 to-transparent border-emerald-500/20">
-          <p className="text-xs uppercase tracking-[0.2em] text-slate-400 mb-1">
+          <p className="text-xs uppercase tracking-[0.2em] text-slate-500 mb-1">
             Total XLM Received
           </p>
           <p className="font-display text-2xl font-bold text-white">
@@ -151,7 +152,7 @@ export default function CreatorTipsDashboard({
         </div>
 
         <div className="card bg-gradient-to-br from-violet-500/10 to-transparent border-violet-500/20">
-          <p className="text-xs uppercase tracking-[0.2em] text-slate-400 mb-1">
+          <p className="text-xs uppercase tracking-[0.2em] text-slate-500 mb-1">
             Average Tip
           </p>
           <p className="font-display text-2xl font-bold text-white">
@@ -196,23 +197,13 @@ export default function CreatorTipsDashboard({
           <h3 className="font-display text-lg font-semibold text-white">
             Tips Received
           </h3>
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => exportTipsToCSV(tips)}
-              disabled={tips.length === 0}
-              className="text-xs text-stellar-400 hover:text-stellar-300 disabled:text-slate-600 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
-            >
-              <DownloadIcon className="w-3 h-3" />
-              Export CSV
-            </button>
-            <button
-              onClick={fetchTips}
-              className="text-xs text-stellar-400 hover:text-stellar-300 transition-colors flex items-center gap-1"
-            >
-              <RefreshIcon className="w-3 h-3" />
-              Refresh
-            </button>
-          </div>
+          <button
+            onClick={fetchTips}
+            className="text-xs text-stellar-400 hover:text-stellar-300 transition-colors flex items-center gap-1"
+          >
+            <RefreshIcon className="w-3 h-3" />
+            Refresh
+          </button>
         </div>
 
         {loading ? (
@@ -228,10 +219,10 @@ export default function CreatorTipsDashboard({
         ) : tips.length === 0 ? (
           <div className="text-center py-8">
             <div className="mx-auto w-12 h-12 rounded-full bg-slate-800 flex items-center justify-center mb-3">
-              <GiftIcon className="w-6 h-6 text-slate-400" />
+              <GiftIcon className="w-6 h-6 text-slate-500" />
             </div>
             <p className="text-slate-400 text-sm">No tips received yet</p>
-            <p className="text-xs text-slate-400 mt-1">
+            <p className="text-xs text-slate-500 mt-1">
               Share your tip page to start receiving tips!
             </p>
           </div>
@@ -251,13 +242,13 @@ export default function CreatorTipsDashboard({
                       <p className="text-sm text-white font-medium">
                         {tip.amount} {tip.asset}
                       </p>
-                      <p className="text-xs text-slate-400">
+                      <p className="text-xs text-slate-500">
                         From: {shortenAddress(tip.senderPublicKey)}
                       </p>
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className="text-xs text-slate-400">
+                    <p className="text-xs text-slate-500">
                       {formatTimestamp(tip.timestamp)}
                     </p>
                     {tip.memo && (
@@ -280,7 +271,7 @@ export default function CreatorTipsDashboard({
                 >
                   ← Previous
                 </button>
-                <span className="text-xs text-slate-400">
+                <span className="text-xs text-slate-500">
                   Page {page + 1} of {Math.ceil(stats.totalTips / pageSize)}
                 </span>
                 <button
@@ -312,14 +303,6 @@ function CopyIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" />
-    </svg>
-  );
-}
-
-function DownloadIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
     </svg>
   );
 }

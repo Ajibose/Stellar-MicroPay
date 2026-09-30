@@ -3,9 +3,8 @@
  * Displays paginated payment history for a Stellar account.
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/router";
-import { withErrorBoundary } from "@/components/ErrorBoundary";
 import {
   getPaymentHistory,
   shortenAddress,
@@ -14,15 +13,6 @@ import {
   PaymentHistoryResponse,
 } from "@/lib/stellar";
 import { formatAsset, timeAgo, copyToClipboard } from "@/utils/format";
-import { loadAddressBookContacts, upsertAddressBookContact } from "@/lib/addressBook";
-import {
-  HistoryIcon,
-  ArrowUpIcon,
-  ArrowDownIcon,
-  RefreshIcon,
-  ExternalLinkIcon,
-  PrinterIcon,
-} from "@/components/icons";
 import clsx from "clsx";
 
 export type TransactionDirectionFilter = "all" | "sent" | "received";
@@ -124,7 +114,7 @@ export function filterPayments(
   });
 }
 
-function TransactionList({
+export default function TransactionList({
   publicKey,
   limit = 20,
   compact = false,
@@ -139,36 +129,10 @@ function TransactionList({
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const [stalePaymentsAt, setStalePaymentsAt] = useState<number | null>(null);
   const router = useRouter();
-
-  const lastPagingTokenRef = useRef<string | undefined>(undefined);
-  const [infiniteScroll, setInfiniteScroll] = useState(false);
-
-  // Sentinel ref for IntersectionObserver — defer initial fetch until visible
-  const containerRef = useRef<HTMLDivElement>(null);
-  const loadMoreRef = useRef<HTMLDivElement>(null);
-  const [isVisible, setIsVisible] = useState(false);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el || typeof IntersectionObserver === "undefined") {
-      setIsVisible(true);
-      return;
-    }
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          setIsVisible(true);
-          observer.disconnect();
-        }
-      },
-      { rootMargin: "200px" }
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
 
   const updatePayments = useCallback(
     (next: PaymentRecord[]) => {
@@ -185,16 +149,15 @@ function TransactionList({
       } else {
         setLoading(true);
         updatePayments([]);
-        lastPagingTokenRef.current = undefined;
+        setNextCursor(undefined);
         setHasMore(true);
       }
       setError(null);
       try {
-        const cursorToUse = isLoadMore ? lastPagingTokenRef.current : undefined;
         const data: PaymentHistoryResponse = await getPaymentHistory(
           publicKey,
           limit,
-          cursorToUse
+          isLoadMore ? nextCursor : undefined
         );
 
         if (isLoadMore) {
@@ -218,8 +181,7 @@ function TransactionList({
         }
 
         setHasMore(data.hasMore);
-        const nextToken = data.records[data.records.length - 1]?.pagingToken;
-        lastPagingTokenRef.current = nextToken;
+        setNextCursor(data.nextCursor);
         setStalePaymentsAt(null);
       } catch (err) {
         const cached = !isLoadMore
@@ -228,7 +190,7 @@ function TransactionList({
         if (cached) {
           updatePayments(cached.records);
           setHasMore(cached.hasMore);
-          lastPagingTokenRef.current = cached.records[cached.records.length - 1]?.pagingToken;
+          setNextCursor(cached.nextCursor);
           setStalePaymentsAt(cached.savedAt);
           setError(null);
           return;
@@ -241,32 +203,12 @@ function TransactionList({
         setLoadingMore(false);
       }
     },
-    [publicKey, limit, updatePayments, onPaymentsChange]
+    [publicKey, limit, nextCursor, updatePayments, onPaymentsChange]
   );
 
-  // IntersectionObserver effect for Infinite Scroll
   useEffect(() => {
-    if (!infiniteScroll || !hasMore || loadingMore || loading) return;
-
-    const el = loadMoreRef.current;
-    if (!el || typeof IntersectionObserver === "undefined") return;
-
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          fetchPayments(true);
-        }
-      },
-      { rootMargin: "200px" }
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [infiniteScroll, hasMore, loadingMore, loading, fetchPayments]);
-
-  useEffect(() => {
-    if (!isVisible) return;
     fetchPayments();
-  }, [fetchPayments, isVisible]);
+  }, [fetchPayments]);
 
   const handleLoadMore = () => fetchPayments(true);
 
@@ -274,17 +216,6 @@ function TransactionList({
     await copyToClipboard(text);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
-  };
-
-  const handleSaveContact = (address: string) => {
-    const existing = loadAddressBookContacts().find((contact) => contact.address === address);
-    const nickname = window.prompt(
-      existing ? "Update contact nickname:" : "Nickname for this contact:",
-      existing?.nickname || address.slice(0, 8)
-    );
-
-    if (!nickname) return;
-    upsertAddressBookContact({ nickname, address });
   };
 
   // Prepend a newly streamed payment if it doesn't already exist
@@ -306,7 +237,7 @@ function TransactionList({
 
   if (loading) {
     return (
-      <div ref={containerRef} className={compact ? "" : "card"}>
+      <div className={compact ? "" : "card"} aria-busy="true">
         {!compact && (
           <div className="flex items-center justify-between mb-6">
             <div className="h-5 w-36 rounded-lg bg-cosmos-700 animate-pulse" />
@@ -337,7 +268,7 @@ function TransactionList({
 
   if (error) {
     return (
-      <div ref={containerRef} className={compact ? "" : "card"}>
+      <div className={compact ? "" : "card"}>
         <div className="text-center py-8">
           <p className="text-red-400 text-sm mb-3">{error}</p>
           <button
@@ -352,75 +283,36 @@ function TransactionList({
   }
 
   if (payments.length === 0) {
-    if (compact) return null;
     return (
-      <div ref={containerRef} className="card">
+      <div className={compact ? "" : "card"}>
         <div className="text-center py-12">
           <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-white/5 flex items-center justify-center">
-            <HistoryIcon className="w-6 h-6 text-slate-400" />
+            <HistoryIcon className="w-6 h-6 text-slate-500" />
           </div>
           <p className="text-slate-400 text-sm">No transactions yet</p>
           <p className="text-slate-600 text-xs mt-1">
             Send your first payment to get started
           </p>
-          {process.env.NEXT_PUBLIC_STELLAR_NETWORK !== "mainnet" && (
-            <p className="text-xs mt-3">
-              Need test XLM?{" "}
-              <a
-                href={`https://friendbot.stellar.org/?addr=${publicKey}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-stellar-400 hover:underline"
-              >
-                Fund this account with Friendbot
-              </a>
-            </p>
-          )}
         </div>
       </div>
     );
   }
 
   return (
-    <div ref={containerRef} className={compact ? "" : "card"}>
+    <div className={compact ? "" : "card"}>
           {!compact && (
             <div className="flex items-center justify-between mb-6">
               <h2 className="font-display text-lg font-semibold text-white flex items-center gap-2">
                 <HistoryIcon className="w-5 h-5 text-stellar-400" />
                 Recent Payments
               </h2>
-              <div className="flex items-center gap-4">
-                {/* Premium Infinite Scroll Toggle */}
-                <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-400 select-none">
-                  <span className={clsx("transition-colors", infiniteScroll ? "text-stellar-400 font-medium" : "")}>
-                    Infinite Scroll
-                  </span>
-                  <div className="relative">
-                    <input
-                      type="checkbox"
-                      className="sr-only"
-                      checked={infiniteScroll}
-                      onChange={(e) => setInfiniteScroll(e.target.checked)}
-                      aria-label="Toggle infinite scroll"
-                    />
-                    <div className={clsx(
-                      "w-8 h-4 rounded-full transition-colors duration-200 ease-in-out",
-                      infiniteScroll ? "bg-stellar-500/30 border border-stellar-400/40" : "bg-white/10 border border-white/5"
-                    )} />
-                    <div className={clsx(
-                      "absolute left-0.5 top-0.5 w-3 h-3 rounded-full bg-white transition-transform duration-200 ease-in-out shadow-sm",
-                      infiniteScroll ? "transform translate-x-4 bg-stellar-300" : "bg-slate-400"
-                    )} />
-                  </div>
-                </label>
-                <button
-                  onClick={() => fetchPayments()}
-                  className="text-xs text-slate-400 hover:text-stellar-400 transition-colors flex items-center gap-1"
-                >
-                  <RefreshIcon className="w-3.5 h-3.5" />
-                  Refresh
-                </button>
-              </div>
+              <button
+                onClick={() => fetchPayments()}
+                className="text-xs text-slate-500 hover:text-stellar-400 transition-colors flex items-center gap-1"
+              >
+                <RefreshIcon className="w-3.5 h-3.5" />
+                Refresh
+              </button>
             </div>
           )}
 
@@ -429,21 +321,16 @@ function TransactionList({
               Offline history snapshot from {formatSnapshotTime(stalePaymentsAt)}
             </div>
           )}
-          
+
           <div className="mb-4 flex items-center gap-3 text-xs text-stellar-400">
             <span className="w-1 h-1 rounded-full bg-stellar-400 flex-shrink-0" />
             <span>Keyboard navigation: ↑ ↓ to navigate, Enter to copy address</span>
           </div>
-          
-          <div
-            role="list"
-            aria-label="Payment history"
-            className="space-y-2"
-          >
+
+          <div className="space-y-2">
         {visiblePayments.map((tx, index) => (
           <div
             key={tx.id}
-            role="listitem"
             tabIndex={focusedIndex === index ? 0 : -1}
             onKeyDown={(e) => {
               if (e.key === 'ArrowDown') {
@@ -506,7 +393,7 @@ function TransactionList({
                 </button>
               </div>
               <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-xs text-slate-400">
+                <span className="text-xs text-slate-500">
                   {timeAgo(tx.createdAt)}
                 </span>
                 {tx.memo && (
@@ -529,15 +416,6 @@ function TransactionList({
                 {formatAsset(tx.amount, tx.asset)}
               </span>
 
-              <button
-                onClick={() => handleSaveContact(tx.type === "sent" ? tx.to : tx.from)}
-                className="opacity-0 group-hover:opacity-100 transition-opacity text-xs text-slate-400 hover:text-stellar-300 font-medium whitespace-nowrap"
-                title="Save this address to contacts"
-                aria-label={`Save ${tx.type === "sent" ? "recipient" : "sender"} to contacts`}
-              >
-                Save contact
-              </button>
-
               {/* Send Again — only for sent transactions */}
               {tx.type === "sent" && (
                 <button
@@ -551,12 +429,12 @@ function TransactionList({
                   Send again
                 </button>
               )}
-              
+
               <a
-                href={explorerUrl(tx.transactionHash) ?? undefined}
+                href={explorerUrl(tx.transactionHash)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-stellar-400"
+                className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-500 hover:text-stellar-400"
                 title="View on Stellar Expert"
                 aria-label="View transaction on Stellar Expert"
               >
@@ -566,20 +444,8 @@ function TransactionList({
           </div>
         ))}
 
-        {/* Infinite Scroll Sentinel / Loading Indicator */}
-        {infiniteScroll && (
-          <div ref={loadMoreRef} className="flex justify-center mt-4 py-2">
-            {loadingMore && (
-              <div className="flex items-center gap-2 text-slate-400">
-                <div className="w-4 h-4 border-2 border-stellar-400 border-t-transparent rounded-full animate-spin" />
-                <span className="text-sm">Loading more...</span>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Load more button (only when NOT using infinite scroll) */}
-        {!infiniteScroll && hasMore && payments.length > 0 && (
+        {/* Load more */}
+        {hasMore && payments.length > 0 && (
           <div className="flex justify-center mt-4">
             <button
               onClick={handleLoadMore}
@@ -602,5 +468,52 @@ function TransactionList({
   );
 }
 
-export default withErrorBoundary(TransactionList, "TransactionList");
+// ─── Icons ─────────────────────────────────────────────────────────────────────
 
+function HistoryIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  );
+}
+
+function ArrowUpIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18" />
+    </svg>
+  );
+}
+
+function ArrowDownIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 13.5L12 21m0 0l-7.5-7.5M12 21V3" />
+    </svg>
+  );
+}
+
+function RefreshIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+    </svg>
+  );
+}
+
+function ExternalLinkIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+    </svg>
+  );
+}
+
+function PrinterIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 9V3.75A1.75 1.75 0 018.5 2h7a1.75 1.75 0 011.75 1.75V9M7.5 18.75h9M5.25 9H18.75A2.25 2.25 0 0121 11.25v5.25a1.5 1.5 0 01-1.5 1.5h-2.25V15H6.75v3H4.5A1.5 1.5 0 013 16.5v-5.25A2.25 2.25 0 015.25 9z" />
+    </svg>
+  );
+}

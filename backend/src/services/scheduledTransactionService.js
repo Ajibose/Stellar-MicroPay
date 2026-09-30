@@ -44,8 +44,6 @@ function scheduleTransaction(signedXDR, submitAt, publicKey) {
     attempts: 0,
     lastError: null,
     createdAt: new Date().getTime(),
-    paused: false, // New: pause state
-    pausedAt: null, // New: timestamp when paused
   };
 
   scheduledTransactions.set(id, scheduledTx);
@@ -69,14 +67,13 @@ function getPendingTransactions(publicKey) {
   const pending = [];
 
   for (const [, tx] of scheduledTransactions.entries()) {
-    if (tx.publicKey === publicKey && tx.submitAt > now && tx.attempts < 3 && !tx.paused) {
+    if (tx.publicKey === publicKey && tx.submitAt > now && tx.attempts < 3) {
       pending.push({
         id: tx.id,
         submitAt: new Date(tx.submitAt),
         publicKey: tx.publicKey,
         attempts: tx.attempts,
         createdAt: new Date(tx.createdAt),
-        paused: tx.paused || false,
       });
     }
   }
@@ -115,10 +112,9 @@ function getDueTransactions() {
     // Only include transactions that:
     // 1. Are due for submission (submitAt <= now)
     // 2. Haven't exceeded max attempts (attempts < 3)
-    // 3. Are not paused (paused !== true)
-    // 4. Haven't been successfully submitted yet (we don't track success separately,
+    // 3. Haven't been successfully submitted yet (we don't track success separately,
     //    but we'll assume if it's still in the queue, it hasn't succeeded)
-    if (tx.submitAt <= now && tx.attempts < 3 && !tx.paused) {
+    if (tx.submitAt <= now && tx.attempts < 3) {
       due.push(tx);
     }
   }
@@ -151,38 +147,6 @@ function removeTransaction(id) {
   return scheduledTransactions.delete(id);
 }
 
-/**
- * Pause a scheduled transaction
- * @param {number} id - The transaction ID
- * @returns {boolean} True if paused, false if not found
- */
-function pauseTransaction(id) {
-  const tx = scheduledTransactions.get(id);
-  if (tx) {
-    tx.paused = true;
-    tx.pausedAt = Date.now();
-    logger.info(JSON.stringify({ type: "transaction_paused", id }));
-    return true;
-  }
-  return false;
-}
-
-/**
- * Resume a paused scheduled transaction
- * @param {number} id - The transaction ID
- * @returns {boolean} True if resumed, false if not found
- */
-function resumeTransaction(id) {
-  const tx = scheduledTransactions.get(id);
-  if (tx) {
-    tx.paused = false;
-    tx.pausedAt = null;
-    logger.info(JSON.stringify({ type: "transaction_resumed", id }));
-    return true;
-  }
-  return false;
-}
-
 module.exports = {
   scheduleTransaction,
   getPendingTransactions,
@@ -191,6 +155,4 @@ module.exports = {
   getDueTransactions,
   incrementAttempt,
   removeTransaction,
-  pauseTransaction,
-  resumeTransaction,
 };

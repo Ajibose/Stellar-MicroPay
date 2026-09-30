@@ -9,16 +9,8 @@ export const test = base.extend<{
   walletState: ['authenticated', { option: true }],
 
   page: async ({ page, walletState }, use) => {
-    // --- Freighter wallet mock ---
-    const publicKeyMap: Record<WalletState, string> = {
-      authenticated: 'GB2JLUHNVHL64FKADLJVH5TMUWTS6P5BS4Y3WJT6KU7FRXBFQM5PGGVV',
-      empty_balance: 'GBPMK2QWQ2JKMSFL6EK44LNK45QWGS7IJBLUZXBT5B2FZXOG77GRQ5J4',
-      insufficient_funds: 'GCFVV3BKTNNXJ46CY2TLAGRYFSP23HKEMP5CJFQU3EBACWSGYRQB5LEE',
-    };
-    const publicKey = publicKeyMap[walletState];
-
     // --- Horizon (Stellar network) ---
-    await page.route('**/horizon-testnet.stellar.org/**', route => {
+    await page.route('**/horizon.stellar.org/**', route => {
       const url = route.request().url();
       if (url.includes('/accounts/')) {
         const balance =
@@ -29,13 +21,7 @@ export const test = base.extend<{
           status: 200,
           contentType: 'application/json',
           body: JSON.stringify({
-            id: publicKey,
-            account_id: publicKey,
-            sequence: '1234567890',
-            subentry_count: 0,
-            thresholds: { low_threshold: 0, med_threshold: 0, high_threshold: 0 },
-            flags: { auth_required: false, auth_revocable: false },
-            signers: [{ key: publicKey, weight: 1, type: 'ed25519_public_key' }],
+            id: 'test-account',
             balances: [{ asset_type: 'native', balance }],
           }),
         });
@@ -82,7 +68,7 @@ export const test = base.extend<{
         body: JSON.stringify({
           success: true,
           data: {
-            publicKey: 'GB2JLUHNVHL64FKADLJVH5TMUWTS6P5BS4Y3WJT6KU7FRXBFQM5PGGVV',
+            publicKey: 'GTESTPUBKEYMOCKED',
             totalSentXLM: '0.00',
             totalReceivedXLM: '0.00',
             sentCount: 0,
@@ -116,42 +102,24 @@ export const test = base.extend<{
       }
     });
 
+    // --- Freighter wallet mock ---
+    const publicKeyMap: Record<WalletState, string> = {
+      authenticated: 'GTESTPUBKEYMOCKED',
+      empty_balance: 'GEMPTYBALANCE',
+      insufficient_funds: 'GINSUFFICIENTFUNDS',
+    };
+    const publicKey = publicKeyMap[walletState];
+
     await page.addInitScript(
       ({ publicKey }: { publicKey: string }) => {
-        (window as any).freighter = true;
-        window.addEventListener("message", (event) => {
-          const request = event.data;
-          if (
-            request?.source !== "FREIGHTER_EXTERNAL_MSG_REQUEST"
-          ) {
-            return;
-          }
-
-          const response: Record<string, unknown> = {
-            source: "FREIGHTER_EXTERNAL_MSG_RESPONSE",
-            messagedId: request.messageId,
-          };
-
-          if (request.type === "REQUEST_ACCESS" || request.type === "REQUEST_PUBLIC_KEY") {
-            response.publicKey = publicKey;
-          } else if (request.type === "REQUEST_ALLOWED_STATUS") {
-            response.isAllowed = true;
-          } else if (request.type === "REQUEST_CONNECTION_STATUS") {
-            response.isConnected = true;
-          } else if (request.type === "SUBMIT_TRANSACTION") {
-            response.signedTransaction = `${request.transactionXdr}_signed`;
-            response.signerAddress = publicKey;
-          }
-
-          setTimeout(() => window.postMessage(response, "*"), 0);
-        });
-
-        (window as any).freighterApi = {
+        // Mock the freighter-api package by overriding the module exports
+        // Since ES modules are hard to mock, we override the global freighter object
+        // that the package checks for
+        (window as any).freighter = {
           isConnected: async () => ({ isConnected: true }),
-          getAddress: async () => ({ address: publicKey }),
           getPublicKey: async () => ({ publicKey }),
-          requestAccess: async () => ({ address: publicKey }),
-          signTransaction: async (xdr: string) => ({ signedTxXdr: xdr + '_signed' }),
+          requestAccess: async () => ({}),
+          signTransaction: async (xdr: string) => ({ signedTransaction: xdr + '_signed' }),
           isAllowed: async () => ({ isAllowed: true }),
         };
       },

@@ -44,6 +44,7 @@ async function registerUsername(req, res, next) {
 
     if (!username || !publicKey) {
       return res.status(400).json({
+        success: false,
         error: "Username and public key are required",
       });
     }
@@ -66,13 +67,6 @@ async function registerUsername(req, res, next) {
 async function resolveUsername(req, res, next) {
   try {
     const { username } = req.params;
-
-    if (username.toLowerCase() === 'alice') {
-      return res.status(501).json({
-        error: "Not Implemented",
-      });
-    }
-
     const result = usernameService.resolveUsername(username);
     res.json({ success: true, data: result });
   } catch (err) {
@@ -80,4 +74,18 @@ async function resolveUsername(req, res, next) {
   }
 }
 
-module.exports = { getAccount, getBalance, registerUsername, resolveUsername };
+/**
+ * GET /api/accounts/:publicKey/has-usdc-trustline
+ * Returns { hasTrustline: boolean }.
+ */
+async function hasUSDCTrustline(req, res, next) {
+  try {
+    const { publicKey } = req.params;
+    const hasTrustline = await stellarService.hasUSDCTrustline(publicKey);
+    res.json({ hasTrustline });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { getAccount, getBalance, registerUsername, resolveUsername, hasUSDCTrustline };

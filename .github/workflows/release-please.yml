@@ -1,0 +1,29 @@
+name: Release Please
+
+# Keeps a release PR open with an auto-generated CHANGELOG.md entry based on
+# conventional commits merged to main. Merging that release PR creates a
+# GitHub release and a vX.Y.Z tag, which triggers docker-publish.yml as before.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+
+    steps:
+      # The default GITHUB_TOKEN cannot trigger other workflows (GitHub's
+      # anti-recursion rule), so the tag this action pushes would silently
+      # fail to trigger docker-publish.yml. RELEASE_PLEASE_TOKEN must be a
+      # PAT (repo scope) or GitHub App token added as a repo secret.
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

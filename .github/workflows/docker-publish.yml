@@ -1,21 +1,20 @@
 name: Publish Docker images
 
-# Build and push backend + frontend images to GitHub Container Registry on every
-# semver tag (e.g. v1.2.3). (#255)
 on:
   push:
-    tags:
-      - "v*.*.*"
+    branches: [main]
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
   publish:
+    name: Build & push images
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+      
     strategy:
       matrix:
         include:
@@ -27,6 +26,7 @@ jobs:
             context: ./frontend
             dockerfile: ./frontend/Dockerfile.prod
             image: stellar-micropay-frontend
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,19 +38,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Derive image tags and labels
+      - name: Derive image tags
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
-          # Produces a tag matching the semver release plus a moving "latest".
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
+            type=sha
 
       - name: Build and push ${{ matrix.name }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v5
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
