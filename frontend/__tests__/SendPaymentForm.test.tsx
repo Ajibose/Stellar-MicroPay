@@ -12,6 +12,11 @@ jest.mock('@/lib/stellar', () => ({
     isValidStellarAddress: jest.fn((addr) => addr.startsWith('G') && addr.length === 56),
     submitTransaction: jest.fn(),
     STELLAR_MEMO_TEXT_MAX_BYTES: 28,
+    STELLAR_MEMO_HASH_HEX_LENGTH: 64,
+    STELLAR_BASE_FEE_XLM: 0.00001,
+    STELLAR_MINIMUM_ACCOUNT_BALANCE_XLM: 1,
+    server: { transactions: () => ({ transaction: () => ({ call: jest.fn() }) }) },
+    fetchNetworkFeeStats: jest.fn().mockResolvedValue({ baseFeeXlm: 0.00001 }),
     memoTextByteLength: jest.fn((memo: string) => encodeURIComponent(memo).replace(/%[0-9A-F]{2}/gi, 'x').length),
     truncateMemoText: jest.fn((memo: string) => Array.from(memo).reduce((result, char) => {
         return encodeURIComponent(result + char).replace(/%[0-9A-F]{2}/gi, 'x').length <= 28 ? result + char : result;
@@ -180,5 +185,33 @@ describe('SendPaymentForm - Memo Templates', () => {
         expect(memoInput.value).toBe('Salary');
         expect(rentChip).not.toHaveClass('bg-stellar-500/20');
         expect(salaryChip).toHaveClass('bg-stellar-500/20');
+    });
+
+    it('renders memo type selector with all four Stellar memo types', () => {
+        render(<SendPaymentForm {...defaultProps} />);
+        const select = screen.getByLabelText('Memo type') as HTMLSelectElement;
+        expect(select).toBeInTheDocument();
+        expect(Array.from(select.options).map((o) => o.value)).toEqual([
+            'text',
+            'id',
+            'hash',
+            'return',
+        ]);
+    });
+
+    it('switches memo input mode for MEMO_ID', async () => {
+        render(<SendPaymentForm {...defaultProps} />);
+        const user = userEvent.setup();
+        const select = screen.getByLabelText('Memo type');
+        await user.selectOptions(select, 'id');
+        expect(screen.getByPlaceholderText(/uint64/i)).toBeInTheDocument();
+        expect(screen.queryByText('Rent')).not.toBeInTheDocument();
+    });
+
+    it('switches memo input mode for MEMO_HASH', async () => {
+        render(<SendPaymentForm {...defaultProps} />);
+        const user = userEvent.setup();
+        await user.selectOptions(screen.getByLabelText('Memo type'), 'hash');
+        expect(screen.getByPlaceholderText(/64-character hex/i)).toBeInTheDocument();
     });
 });
