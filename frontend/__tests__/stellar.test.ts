@@ -1,5 +1,6 @@
 import {
   buildAccountMergeTransaction,
+  buildPaymentTransaction,
   collectSignatures,
   getNetworkPassphrase,
   isValidStellarAddress,
@@ -8,7 +9,7 @@ import {
   truncateMemoText,
   memoTextByteLength,
 } from "@/lib/stellar";
-import { Account, Transaction } from "@stellar/stellar-sdk";
+import { Account, Keypair, Transaction } from "@stellar/stellar-sdk";
 
 /** Valid mainnet-format address: G + 55 base32 chars (A-Z, 2-7). */
 const VALID_MAINNET_ADDRESS =

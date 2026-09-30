@@ -130,7 +130,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Start stack with docker compose
-        run: docker compose up -d --build
+        run: |
+          if ! docker compose up -d --build --wait --wait-timeout 300; then
+            echo "::group::Container logs"
+            docker compose logs --no-color --tail=200
+            echo "::endgroup::"
+            exit 1
+          fi
       - name: Wait for backend healthcheck
         run: |
           for i in $(seq 1 30); do
