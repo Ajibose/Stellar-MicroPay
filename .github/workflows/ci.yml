@@ -72,6 +72,8 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
       - uses: Swatinem/rust-cache@v2
       - name: Install stellar-cli (required by soroban-sdk v28 build script)
         run: |
@@ -81,10 +83,16 @@ jobs:
             sudo install -m 755 /tmp/stellar-cli/stellar /usr/local/bin/stellar
           fi
           stellar --version
+      # Run tests before the build: 'stellar contract build' writes a
+      # .cargo/config.toml pinning build-target=wasm32v1-none at the workspace
+      # root, which would otherwise force cargo test onto the wasm target and
+      # fail with E0463 (can't find crate for `core`).
+      - name: Run contract tests
+        working-directory: contracts/stellar-micropay-contract
+        run: cargo test
       - name: Build contract WASM
         working-directory: contracts/stellar-micropay-contract
         run: stellar contract build
-      - run: cargo test
       - uses: actions/upload-artifact@v4
         with:
           name: stellar-micropay-contract-wasm
