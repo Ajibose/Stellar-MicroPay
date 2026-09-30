@@ -73,14 +73,13 @@ jobs:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install stellar-cli
+      - name: Install stellar-cli (required by soroban-sdk v28 build script)
         run: |
-          set -euo pipefail
-          ver=25.2.0
-          curl -sSL -o /tmp/stellar.tar.gz \
-            "https://github.com/stellar/stellar-cli/releases/download/v${ver}/stellar-cli-v${ver}-x86_64-unknown-linux-gnu.tar.gz"
-          tar -xzf /tmp/stellar.tar.gz -C /tmp
-          sudo install -m 0755 "/tmp/stellar-cli-v${ver}-x86_64-unknown-linux-gnu/stellar" /usr/local/bin/stellar
+          if ! command -v stellar >/dev/null 2>&1; then
+            curl -sSfL -o /tmp/stellar-cli.tar.gz https://github.com/stellar/stellar-cli/releases/download/v25.2.0/stellar-cli-25.2.0-x86_64-unknown-linux-gnu.tar.gz
+            mkdir -p /tmp/stellar-cli && tar -xzf /tmp/stellar-cli.tar.gz -C /tmp/stellar-cli
+            sudo install -m 755 /tmp/stellar-cli/stellar /usr/local/bin/stellar
+          fi
           stellar --version
       - name: Build contract WASM
         working-directory: contracts/stellar-micropay-contract
@@ -114,3 +113,29 @@ jobs:
           name: playwright-report
           path: frontend/playwright-report/
           if-no-files-found: warn
+
+  health-smoke:
+    name: Docker Compose health smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start stack with docker compose
+        run: docker compose up -d --build
+      - name: Wait for backend healthcheck
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:4000/health >/dev/null; then
+              echo "Backend healthy"
+              exit 0
+            fi
+            echo "Waiting for backend... ($i/30)"
+            sleep 2
+          done
+          echo "Backend did not become healthy in time"
+          docker compose logs
+          exit 1
+      - name: Run /health smoke test
+        run: SMOKE_HEALTH_ONLY=1 HEALTH_URL=http://localhost:4000 node scripts/smoke-test.js
+      - name: Tear down stack
+        if: always()
+        run: docker compose down -v
