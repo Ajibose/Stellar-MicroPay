@@ -163,7 +163,9 @@ describe("Analytics Cache - Redis Integration (#1072)", () => {
 
     // Verify Redis DEL was called for the prefix
     expect(redisModule.__mockClient.del).toHaveBeenCalled();
-    const delArgs = redisModule.__mockClient.del.mock.calls.flat();
+    // del() is called with the key array as a single argument, so flatten
+    // twice to surface the individual key strings.
+    const delArgs = redisModule.__mockClient.del.mock.calls.flat(2);
     expect(delArgs).toContain(`summary:${testPublicKey}`);
 
     // Next call should be a cache miss (fetches again)

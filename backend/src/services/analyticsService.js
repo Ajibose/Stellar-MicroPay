@@ -516,7 +516,7 @@ async function triggerEmailExport(publicKey) {
   const htmlContent = `
     <h1>Stellar MicroPay Summary Data Export</h1>
     <p>PublicKey: <code>${publicKey}</code></p>
-    
+
     <h2>Summary Statistics</h2>
     <ul>
       <li>Total Sent: ${summary.totalSentXLM} XLM</li>
