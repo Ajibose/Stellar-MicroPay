@@ -20,6 +20,9 @@ const healthRoutes = require("./routes/health");
 const federationRoutes = require("./routes/federation");
 const turretsRoutes = require("./routes/turrets");
 const tipsRoutes = require("./routes/tips");
+const webhookRoutes = require("./routes/webhooks");
+const networkRoutes = require("./routes/network");
+const priceAlertsRoutes = require("./routes/priceAlerts");
 const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./swagger");
 const { startTurretsServer } = require("./turretsServer");
@@ -30,21 +33,11 @@ const PORT = process.env.PORT || 4000;
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
+app.use(requestId);
 app.use(helmet());
-app.use(morgan("dev"));
-// Keep the raw request bytes for the signature check (see
-// middleware/requestSignature.js). Signing a re-serialised `req.body` instead
-// would make verification depend on JSON key ordering matching between client
-// and server — a mismatch there silently accepts a signature over bytes the
-// client never sent. The 10kb limit below bounds what this retains.
-app.use(
-  express.json({
-    limit: "10kb",
-    verify: (req, _res, buf) => {
-      req.rawBody = buf.toString("utf8");
-    },
-  })
-);
+morgan.token("request-id", (req) => req.requestId);
+app.use(morgan(":method :url :status :response-time ms requestId=:request-id"));
+app.use(express.json({ limit: "10kb" }));
 
 // JSON parsing error handler
 app.use((err, req, res, next) => {
@@ -69,13 +62,12 @@ app.use(
         callback(new Error(`CORS: origin ${origin} not allowed`));
       }
     },
-    methods: ["GET", "POST"],
-    // X-Timestamp / X-Signature carry the request signature for endpoints that
-    // require one. CORS only permits headers a browser is told are safe, so an
-    // omitted entry here makes the browser drop the pair in preflight and the
-    // request arrives unsigned.
-    allowedHeaders: ["Content-Type", "Authorization", "X-Timestamp", "X-Signature"],
+    methods: ["GET", "POST", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID"],
+    exposedHeaders: ["X-Request-ID"],
     credentials: true,
+    optionsSuccessStatus: 204,
+    maxAge: 600,
   })
 );
 
@@ -99,6 +91,8 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/health", healthRoutes);
 app.use("/api/turrets", turretsRoutes);
 app.use("/api/tips", tipsRoutes);
+app.use("/api/network", networkRoutes);
+app.use("/api/price-alerts", priceAlertsRoutes);
 app.use("/federation", federationRoutes);
 
 // ─── API Documentation ─────────────────────────────────────────────────────────
@@ -120,6 +114,8 @@ app.use((err, req, res, next) => {
   void next;
   const status = err.status || 500;
   const message = err.message || "Internal Server Error";
+
+  console.error({ requestId: req.requestId, status, message });
 
   res.status(status).json({ error: message });
 });

@@ -87,8 +87,8 @@ interface BarcodeDetectorLike {
   detect(source: ImageBitmapSource): Promise<BarcodeDetectorResult[]>;
 }
 
-const RECENT_RECIPIENTS_KEY = "stellar-micropay:recent-recipients";
-const MAX_RECENT = 3;
+const RECENT_RECIPIENTS_KEY = "stellar-micropay:recent-destinations";
+const MAX_RECENT = 5;
 
 function createInitialStepTimings(): Record<PaymentStepId, PaymentStepTiming> {
   return {
@@ -233,7 +233,8 @@ export default function SendPaymentForm({
   const [recentRecipients, setRecentRecipients] = useState<string[]>(() => {
     try {
       if (typeof window !== "undefined") {
-        return JSON.parse(sessionStorage.getItem(RECENT_RECIPIENTS_KEY) ?? "[]");
+        const parsed = JSON.parse(localStorage.getItem(RECENT_RECIPIENTS_KEY) ?? "[]");
+        return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string").slice(0, MAX_RECENT) : [];
       }
       return [];
     } catch {
@@ -253,6 +254,7 @@ export default function SendPaymentForm({
   });
 
   const [isFavouritesDropdownOpen, setIsFavouritesDropdownOpen] = useState(false);
+  const [isRecentDropdownOpen, setIsRecentDropdownOpen] = useState(false);
   const [activeSuggestion, setActiveSuggestion] = useState(0);
   const contactSuggestions = hideDestinationField
     ? []
@@ -293,6 +295,7 @@ export default function SendPaymentForm({
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setIsFavouritesDropdownOpen(false);
+        setIsRecentDropdownOpen(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -303,13 +306,14 @@ export default function SendPaymentForm({
     const updated = [address, ...recentRecipients.filter((a) => a !== address)].slice(0, MAX_RECENT);
     setRecentRecipients(updated);
     if (typeof window !== "undefined") {
-      sessionStorage.setItem(RECENT_RECIPIENTS_KEY, JSON.stringify(updated));
+      localStorage.setItem(RECENT_RECIPIENTS_KEY, JSON.stringify(updated));
     }
   };
 
   const clearRecipients = () => {
     setRecentRecipients([]);
-    sessionStorage.removeItem(RECENT_RECIPIENTS_KEY);
+    localStorage.removeItem(RECENT_RECIPIENTS_KEY);
+    setIsRecentDropdownOpen(false);
   };
 
   const memoTemplates = ["Rent", "Salary", "Invoice", "Gift", "Coffee ☕"];
@@ -808,6 +812,7 @@ export default function SendPaymentForm({
               type="text"
               value={destination}
               onChange={(e) => setDestination(e.target.value)}
+              onFocus={() => setIsRecentDropdownOpen(recentRecipients.length > 0)}
               onKeyDown={handleDestinationKeyDown}
               role="combobox"
               aria-autocomplete="list"
@@ -817,6 +822,27 @@ export default function SendPaymentForm({
               className={clsx("input-field font-mono text-sm", destination && !isValidDest && !isUsernameDestination && "border-red-500/50")}
               disabled={status !== "idle" || destinationReadOnly}
             />
+
+            {isRecentDropdownOpen && recentRecipients.length > 0 && contactSuggestions.length === 0 && (
+              <div role="listbox" aria-label="Recent destinations" className="absolute left-0 right-0 z-40 mt-1 overflow-hidden rounded-xl border border-white/10 bg-slate-900 shadow-2xl">
+                <p className="px-3 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Recent destinations</p>
+                {recentRecipients.map((address) => (
+                  <button
+                    key={address}
+                    type="button"
+                    role="option"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => { setDestination(address); setIsRecentDropdownOpen(false); }}
+                    className="flex w-full items-center justify-between px-3 py-2 text-left font-mono text-sm text-slate-200 hover:bg-white/5"
+                  >
+                    <span>{shortenAddress(address, 10)}</span>
+                  </button>
+                ))}
+                <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={clearRecipients} className="w-full border-t border-white/10 px-3 py-2 text-left text-xs font-medium text-red-300 hover:bg-white/5">
+                  Clear history
+                </button>
+              </div>
+            )}
 
             {contactSuggestions.length > 0 && (
               <ul id="destination-suggestions" role="listbox" aria-label="Contact suggestions" className="absolute left-0 right-0 z-50 mt-1 max-h-60 overflow-y-auto rounded-xl border border-white/10 bg-slate-900 p-1 shadow-2xl">
