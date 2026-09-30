@@ -29,6 +29,8 @@ const BatchPaymentForm = dynamic(() => import("../components/BatchPaymentForm"),
 const QRCodeModal = dynamic(() => import("../components/QRCodeModal"), { ssr: false });
 const CreatorTipsDashboard = dynamic(() => import("../components/CreatorTipsDashboard"), { ssr: false });
 const AIPaymentAssistant = dynamic(() => import("../components/AIPaymentAssistant"), { ssr: false });
+const PaymentInsightsCard = dynamic(() => import("../components/PaymentInsightsCard"), { ssr: false });
+const AddUsdcTrustline = dynamic(() => import("../components/AddUsdcTrustline"), { ssr: false });
 
 import {
   ResponsiveContainer,
@@ -186,6 +188,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
   // Stats and charts state
   const [spendingData, setSpendingData] = useState<any[]>([]);
   const [spendingLoading, setSpendingLoading] = useState(false);
+  const [recentPaymentsForStats, setRecentPaymentsForStats] = useState<PaymentRecord[]>([]);
   const [selectedMonth, setSelectedMonth] = useState<any | null>(null);
   const [sparklineData, setSparklineData] = useState<any[]>([]);
   const [sparklineLoading, setSparklineLoading] = useState(false);
@@ -340,6 +343,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
     setSpendingLoading(true);
     try {
       const payments = await getRecentPaymentsForStats(publicKey, 200);
+      setRecentPaymentsForStats(payments);
 
       // Group by calendar month (last 6 months)
       const now = new Date();
@@ -920,6 +924,12 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
         )}
       </div>
 
+      <PaymentInsightsCard
+        payments={recentPaymentsForStats}
+        publicKey={publicKey}
+        loading={spendingLoading}
+      />
+
       {/* Reserve warning (#164). Amber when balance is within 2 XLM of the
           minimum reserve, red when at or below it. Suppressed when the
           account isn't funded — the Friendbot card below covers that path. */}
@@ -995,6 +1005,12 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
           </div>
         </div>
       )}
+
+      {/* USDC trustline onboarding (#1069) — one-click "Add USDC" when missing */}
+      <AddUsdcTrustline
+        publicKey={publicKey}
+        onTrustlineAdded={() => setRefreshKey((k) => k + 1)}
+      />
 
       {/* USDC balance card — shown only when account has USDC trustline */}
       {usdcBalance !== null && (
