@@ -54,6 +54,7 @@
     "typescript": "^5"
   },
   "overrides": {
+    "brace-expansion": "^2.1.7",
     "qs": "^6.16.0",
     "toml": "^4.2.0"
   },

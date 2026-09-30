@@ -74,9 +74,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install stellar-cli
-        uses: stellar/stellar-cli@v1
-        with:
-          version: "25.2.0"
+        run: |
+          set -euo pipefail
+          ver=25.2.0
+          curl -sSL -o /tmp/stellar.tar.gz \
+            "https://github.com/stellar/stellar-cli/releases/download/v${ver}/stellar-cli-v${ver}-x86_64-unknown-linux-gnu.tar.gz"
+          tar -xzf /tmp/stellar.tar.gz -C /tmp
+          sudo install -m 0755 "/tmp/stellar-cli-v${ver}-x86_64-unknown-linux-gnu/stellar" /usr/local/bin/stellar
+          stellar --version
       - name: Build contract WASM
         working-directory: contracts/stellar-micropay-contract
         run: stellar contract build

@@ -91,6 +91,46 @@ export const NETWORK: "testnet" | "mainnet" = getNetwork();
 export const HORIZON_URL: string = getHorizonUrl();
 export const NETWORK_PASSPHRASE: string = getNetworkPassphrase();
 
+/** Maximum length, in bytes, of a Stellar memo text field. */
+export const MEMO_TEXT_MAX_BYTES = 28;
+
+/** UTF-8 byte length of a string. */
+export function memoTextByteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+/**
+ * Sanitise and clamp memo text to the 28-byte protocol limit.
+ *
+ * Non-printable control characters (C0 range plus DEL) are removed outright,
+ * then the remainder is truncated on a codepoint boundary so multi-byte
+ * characters are never split in half.
+ */
+export function truncateMemoText(text: string): string {
+  // Strip C0 control characters and DEL.
+  const cleaned = text.replace(/[\u0000-\u001F\u007F]/g, "");
+
+  if (memoTextByteLength(cleaned) <= MEMO_TEXT_MAX_BYTES) {
+    return cleaned;
+  }
+
+  const encoder = new TextEncoder();
+  let result = "";
+  let bytes = 0;
+
+  // Iterating a string yields whole codepoints, so surrogate pairs stay intact.
+  for (const char of cleaned) {
+    const charBytes = encoder.encode(char).length;
+    if (bytes + charBytes > MEMO_TEXT_MAX_BYTES) {
+      break;
+    }
+    result += char;
+    bytes += charBytes;
+  }
+
+  return result;
+}
+
 /** Pre-configured Horizon server instance for the active network. */
 let _server: Horizon.Server | null = null;
 export function getServer(): Horizon.Server {
