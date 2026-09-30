@@ -128,10 +128,28 @@ async function getTopTippers(req, res, next) {
   }
 }
 
+/**
+ * GET /api/tips/leaderboard
+ * Get global leaderboard with top recipients and senders.
+ */
+async function getGlobalLeaderboard(req, res, next) {
+  try {
+    const result = tipsService.getGlobalLeaderboard();
+    
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   recordTip,
   getTipsReceived,
   getTipsStats,
   getTipsSent,
   getTopTippers,
+  getGlobalLeaderboard,
 };

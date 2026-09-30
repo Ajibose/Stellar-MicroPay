@@ -1132,6 +1132,9 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
                       </>
                     )}
                   </button>
+                  <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                    Notes are local to this browser and will be included in the export.
+                  </p>
                 </div>
               </div>
             ),

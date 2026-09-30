@@ -242,6 +242,89 @@ function getTopTippers(creatorPublicKey, limit = 5) {
   return result;
 }
 
+/**
+ * Get global leaderboard with top recipients and senders.
+ * @returns {object} Object with topRecipients, topSenders, and totalTipped
+ */
+function getGlobalLeaderboard() {
+  const TOP_LIMIT = 10;
+  
+  // Aggregate by recipient (creators)
+  const recipientTotals = new Map();
+  // Aggregate by sender
+  const senderTotals = new Map();
+  let totalTipped = 0;
+  let totalTipCount = 0;
+
+  for (const tips of tipsByCreator.values()) {
+    for (const tip of tips) {
+      const amount = parseFloat(tip.amount) || 0;
+      totalTipped += amount;
+      totalTipCount++;
+
+      // Aggregate by recipient
+      recipientTotals.set(
+        tip.creatorPublicKey,
+        (recipientTotals.get(tip.creatorPublicKey) || 0) + amount
+      );
+
+      // Aggregate by sender
+      senderTotals.set(
+        tip.senderPublicKey,
+        (senderTotals.get(tip.senderPublicKey) || 0) + amount
+      );
+    }
+  }
+
+  // Convert recipients to array with counts
+  const recipientCounts = new Map();
+  for (const tips of tipsByCreator.values()) {
+    for (const tip of tips) {
+      recipientCounts.set(
+        tip.creatorPublicKey,
+        (recipientCounts.get(tip.creatorPublicKey) || 0) + 1
+      );
+    }
+  }
+
+  const topRecipients = Array.from(recipientTotals.entries())
+    .map(([address, totalXLM]) => ({
+      address,
+      federationName: null, // Could be resolved from federation service
+      totalXLM: totalXLM.toFixed(7),
+      count: recipientCounts.get(address) || 0,
+    }))
+    .sort((a, b) => parseFloat(b.totalXLM) - parseFloat(a.totalXLM))
+    .slice(0, TOP_LIMIT);
+
+  // Convert senders to array with counts
+  const senderCounts = new Map();
+  for (const tips of tipsByCreator.values()) {
+    for (const tip of tips) {
+      senderCounts.set(
+        tip.senderPublicKey,
+        (senderCounts.get(tip.senderPublicKey) || 0) + 1
+      );
+    }
+  }
+
+  const topSenders = Array.from(senderTotals.entries())
+    .map(([address, totalXLM]) => ({
+      address,
+      federationName: null, // Could be resolved from federation service
+      totalXLM: totalXLM.toFixed(7),
+      count: senderCounts.get(address) || 0,
+    }))
+    .sort((a, b) => parseFloat(b.totalXLM) - parseFloat(a.totalXLM))
+    .slice(0, TOP_LIMIT);
+
+  return {
+    topRecipients,
+    topSenders,
+    totalTipped: totalTipped.toFixed(7),
+  };
+}
+
 module.exports = {
   recordTip,
   getTipsReceived,
@@ -249,4 +332,5 @@ module.exports = {
   getTipsSent,
   validateTipInput,
   getTopTippers,
+  getGlobalLeaderboard,
 };

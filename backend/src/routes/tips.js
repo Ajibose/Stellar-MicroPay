@@ -41,4 +41,10 @@ router.get("/sent/:senderPublicKey", strictLimiter, sanitizePublicKey, tipsContr
  */
 router.get("/leaderboard/:creatorPublicKey", strictLimiter, sanitizePublicKey, tipsController.getTopTippers);
 
+/**
+ * GET /api/tips/leaderboard
+ * Get global leaderboard with top recipients and senders.
+ */
+router.get("/leaderboard", strictLimiter, tipsController.getGlobalLeaderboard);
+
 module.exports = router;
