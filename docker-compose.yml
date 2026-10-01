@@ -24,6 +24,9 @@ services:
       - STELLAR_NETWORK=testnet
       - HORIZON_URL=https://horizon-testnet.stellar.org
       - ALLOWED_ORIGINS=http://localhost:3000
+      # Non-production default so local/compose health checks can boot without a
+      # real secret. Production images override this via the environment.
+      - JWT_SECRET=local-development-jwt-secret-change-me
       - REDIS_URL=redis://redis:6379
       - ANALYTICS_CACHE_TTL_MS=300000
     depends_on:

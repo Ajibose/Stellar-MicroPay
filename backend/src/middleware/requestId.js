@@ -9,4 +9,4 @@ function requestId(req, res, next) {
   next();
 }
 
-module.exports = requestId;
+module.exports = { requestId };

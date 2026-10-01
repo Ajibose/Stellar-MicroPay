@@ -929,6 +929,66 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
     }
   };
 
+  /**
+   * Record the newest payment we have already seen so the realtime stream
+   * does not re-announce it on connect.
+   */
+  const primeRealtimeCursor = useCallback(async () => {
+    if (!publicKey) return;
+    try {
+      const recent = await fetchAllPayments(publicKey, { pageSize: 1, maxPages: 1 });
+      latestPaymentIdRef.current = recent.length > 0 ? recent[0].id : null;
+    } catch {
+      latestPaymentIdRef.current = null;
+    }
+  }, [publicKey]);
+
+  /**
+   * Handle a payment pushed over the realtime stream: ignore duplicates, raise
+   * an OS notification when the tab is hidden, an in-app bubble when visible,
+   * and refresh the derived stats.
+   */
+  const handleRealtimePayment = useCallback(async (payment: PaymentRecord) => {
+    if (payment.id === latestPaymentIdRef.current) return;
+    latestPaymentIdRef.current = payment.id;
+
+    if (typeof document !== "undefined" && document.hidden) {
+      try {
+        if ("serviceWorker" in navigator && Notification.permission === "granted") {
+          const registration = await navigator.serviceWorker.ready;
+          await registration.showNotification("Stellar Pay", {
+            body: `You received ${payment.amount} ${payment.asset}`,
+            icon: "/favicon.svg",
+            badge: "/favicon.svg",
+          });
+        }
+      } catch (error) {
+        console.error("Failed to show realtime payment notification:", error);
+      }
+    } else {
+      setBubbleMessage(`You received ${payment.amount} ${payment.asset}`);
+      setShowBubble(true);
+      setTimeout(() => setShowBubble(false), 3000);
+    }
+
+    setRefreshKey((current) => current + 1);
+  }, []);
+
+  /** Restart periodic stat refreshes used when SSE is unavailable. */
+  const startPollingFallback = useCallback(() => {
+    if (realtimePollRef.current !== null || typeof window === "undefined") return;
+    realtimePollRef.current = window.setInterval(() => {
+      setRefreshKey((current) => current + 1);
+    }, 15000);
+  }, []);
+
+  /** Stop the polling fallback if it is running. */
+  const stopPollingFallback = useCallback(() => {
+    if (realtimePollRef.current === null || typeof window === "undefined") return;
+    window.clearInterval(realtimePollRef.current);
+    realtimePollRef.current = null;
+  }, []);
+
   // Real-time payment streaming for the connected wallet.
   // On incoming payment: show OS notification when page is hidden,
   // in-app bubble when page is visible.
@@ -1433,7 +1493,6 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
               publicKey={publicKey}
               xlmBalance={xlmBalance || "0"}
               usdcBalance={usdcBalance}
-              accountBalances={otherBalances}
               onSuccess={handlePaymentSuccess}
               prefill={
                 aiPrefillData

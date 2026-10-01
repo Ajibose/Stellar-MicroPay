@@ -43,6 +43,15 @@
   },
   "jest": {
     "setupFilesAfterEnv": ["<rootDir>/jest.setup.js"],
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "\\.ts$",
+      "\\.tsx$"
+    ],
+    "moduleFileExtensions": [
+      "js",
+      "json"
+    ]
   }
 }

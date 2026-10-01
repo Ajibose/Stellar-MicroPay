@@ -11,6 +11,72 @@ const cache = require("./cache");
 const stellarService = require("./stellarService");
 const logger = require("../utils/logger");
 
+// ─── Legacy In-Memory Archive Sweep ──────────────────────────────────────────
+// Entries written directly through the archive helpers at the bottom of this
+// file (rather than through `cache`) are swept periodically so that the Map
+// cannot grow unbounded.
+
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const SWEEP_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+
+// Map structure: key -> { data, timestamp }
+const analyticsCache = new Map();
+
+function sweepCache() {
+  const now = Date.now();
+  let evictedCount = 0;
+
+  for (const [key, entry] of analyticsCache.entries()) {
+    if (now - entry.timestamp > CACHE_TTL_MS) {
+      analyticsCache.delete(key);
+      evictedCount++;
+    }
+  }
+
+  logger.info(`Cache sweep: evicted ${evictedCount} entries`);
+  return evictedCount;
+}
+
+let sweepIntervalId = null;
+
+function startCacheSweep() {
+  sweepIntervalId = setInterval(sweepCache, SWEEP_INTERVAL_MS);
+  // Unref so the interval never keeps the process alive on its own.
+  if (sweepIntervalId.unref) {
+    sweepIntervalId.unref();
+  }
+  return sweepIntervalId;
+}
+
+startCacheSweep();
+
+function stopCacheSweep() {
+  clearInterval(sweepIntervalId);
+}
+
+function getCachedAnalytics(publicKey) {
+  const entry = analyticsCache.get(publicKey);
+  if (!entry) return null;
+
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+    analyticsCache.delete(publicKey);
+    return null;
+  }
+
+  return entry.data;
+}
+
+function setCachedAnalytics(publicKey, data) {
+  analyticsCache.set(publicKey, {
+    data,
+    timestamp: Date.now(),
+  });
+}
+
+function clearAnalyticsCache() {
+  analyticsCache.clear();
+}
+
 // ─── Cache Configuration ──────────────────────────────────────────────────────
 //
 // The cache layer (src/services/cache.js) uses Redis when REDIS_URL is set and
@@ -584,64 +650,9 @@ module.exports = {
   withCache,
   cache,
   stopCacheSweep,
+  startCacheSweep,
+  sweepCache,
   getCachedAnalytics,
   setCachedAnalytics,
   clearAnalyticsCache,
 };
-
-
-const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
-const SWEEP_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
-
-// Map structure: key -> { data, timestamp }
-const analyticsCache = new Map();
-
-function sweepCache() {
-  const now = Date.now();
-  let evictedCount = 0;
-
-  for (const [key, entry] of analyticsCache.entries()) {
-    if (now - entry.timestamp > CACHE_TTL_MS) {
-      analyticsCache.delete(key);
-      evictedCount++;
-    }
-  }
-
-  logger.info(`Cache sweep: evicted ${evictedCount} entries`);
-  return evictedCount;
-}
-
-// Start periodic sweep interval
-const sweepIntervalId = setInterval(sweepCache, SWEEP_INTERVAL_MS);
-
-// Allow interval to unref so it doesn't block process exit if needed, and export stopper
-if (sweepIntervalId.unref) {
-  sweepIntervalId.unref();
-}
-
-function stopCacheSweep() {
-  clearInterval(sweepIntervalId);
-}
-
-function getCachedAnalytics(publicKey) {
-  const entry = analyticsCache.get(publicKey);
-  if (!entry) return null;
-
-  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
-    analyticsCache.delete(publicKey);
-    return null;
-  }
-
-  return entry.data;
-}
-
-function setCachedAnalytics(publicKey, data) {
-  analyticsCache.set(publicKey, {
-    data,
-    timestamp: Date.now(),
-  });
-}
-
-function clearAnalyticsCache() {
-  analyticsCache.clear();
-}

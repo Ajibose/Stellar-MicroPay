@@ -29,6 +29,7 @@ import {
 import { Federation } from "@stellar/stellar-sdk";
 import { signTransactionWithWallet } from "@/lib/wallet";
 import { formatXLM, shortenAddress } from "@/utils/format";
+import { resolveSNSDomain } from "@/utils/snsResolver";
 import clsx from "clsx";
 import { useEffect, useRef, useState } from "react";
 
@@ -153,6 +154,13 @@ export default function SendPaymentForm({
   const [federationResolvedAddress, setFederationResolvedAddress] = useState<string | null>(null);
   const [federationError, setFederationError] = useState<string | null>(null);
   const federationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Stellar Name Service (.xlm) resolution
+  const [isResolvingSNS, setIsResolvingSNS] = useState(false);
+  const [snsResolvedAddress, setSnsResolvedAddress] = useState<string | null>(null);
+  const [snsError, setSnsError] = useState<string | null>(null);
+  const snsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const originalDestinationRef = useRef<string>("");
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -377,12 +385,60 @@ export default function SendPaymentForm({
   const isValidDest = destination.length > 0 && isValidStellarAddress(destination);
 
   const isUsernameDestination = /^@?[a-zA-Z0-9]{3,20}$/.test(destination) && !isValidStellarAddress(destination);
+  const isSNSDestination = destination.trim().toLowerCase().endsWith(".xlm");
 
   const MIN_STROOP = 0.0000001;
   const isValidAmt = !Number.isNaN(amountNum) && amountNum >= MIN_STROOP && amountNum <= maxSend;
 
-  const canSubmit = (isValidDest || (isUsernameDestination && !isResolvingUsername && !usernameResolutionError)) &&
+  const canSubmit =
+    (isValidDest ||
+      (isUsernameDestination && !isResolvingUsername && !usernameResolutionError) ||
+      (isSNSDestination && !!snsResolvedAddress && !snsError)) &&
     isValidAmt && status === "idle" && destination !== publicKey;
+
+  // Stellar Name Service (.xlm) resolution with debounce (#1197)
+  useEffect(() => {
+    if (snsDebounceRef.current) {
+      clearTimeout(snsDebounceRef.current);
+    }
+
+    const domain = destination.trim();
+    const isDomain = domain.toLowerCase().endsWith(".xlm");
+
+    if (!isDomain) {
+      setIsResolvingSNS(false);
+      setSnsResolvedAddress(null);
+      setSnsError(null);
+      return;
+    }
+
+    setIsResolvingSNS(true);
+    setSnsError(null);
+    setSnsResolvedAddress(null);
+
+    snsDebounceRef.current = setTimeout(async () => {
+      try {
+        const address = await resolveSNSDomain(domain);
+        if (address) {
+          originalDestinationRef.current = domain;
+          setSnsResolvedAddress(address);
+          setSnsError(null);
+        } else {
+          setSnsError("SNS name not found");
+        }
+      } catch {
+        setSnsError("SNS name not found");
+      } finally {
+        setIsResolvingSNS(false);
+      }
+    }, 300);
+
+    return () => {
+      if (snsDebounceRef.current) {
+        clearTimeout(snsDebounceRef.current);
+      }
+    };
+  }, [destination]);
 
   const resolveUsername = async (username: string) => {
     const cleanUsername = username.replace(/^@/, "").toLowerCase();
@@ -801,10 +857,26 @@ export default function SendPaymentForm({
               aria-autocomplete="list"
               aria-expanded={contactSuggestions.length > 0}
               aria-controls="destination-suggestions"
-              placeholder="G... or @username"
-              className={clsx("input-field font-mono text-sm", destination && !isValidDest && !isUsernameDestination && "border-red-500/50")}
+              placeholder="G... or @username or alice.xlm"
+              className={clsx("input-field font-mono text-sm", destination && !isValidDest && !isUsernameDestination && !isSNSDestination && "border-red-500/50")}
               disabled={status !== "idle" || destinationReadOnly}
             />
+
+            {isSNSDestination && isResolvingSNS && (
+              <p className="mt-1 text-xs text-slate-400">
+                Resolving {destination.trim()}…
+              </p>
+            )}
+
+            {isSNSDestination && snsResolvedAddress && (
+              <p className="mt-1 inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">
+                Resolved: {snsResolvedAddress}
+              </p>
+            )}
+
+            {isSNSDestination && snsError && (
+              <p className="mt-1 text-xs text-red-400">{snsError}</p>
+            )}
 
             {isRecentDropdownOpen && recentRecipients.length > 0 && contactSuggestions.length === 0 && (
               <div role="listbox" aria-label="Recent destinations" className="absolute left-0 right-0 z-40 mt-1 overflow-hidden rounded-xl border border-white/10 bg-slate-900 shadow-2xl">
