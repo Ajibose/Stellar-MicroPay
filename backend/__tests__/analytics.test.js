@@ -20,10 +20,10 @@ const {
 jest.mock("../src/services/stellarService");
 
 describe("Analytics Service", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     jest.clearAllMocks();
     // Clear cache for each test
-    await analyticsService.clearCache("GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJLVXKJ46ZGFWTTNQNXNHTJXW");
+    analyticsService.clearCache("GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJLVXKJ46ZGFWTTNQNXNHTJXW");
   });
 
   const testPublicKey = "GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJLVXKJ46ZGFWTTNQNXNHTJXW";
@@ -287,7 +287,7 @@ describe("Analytics Service", () => {
       expect(stellarService.getPayments).toHaveBeenCalledTimes(1);
 
       // Clear cache
-      await analyticsService.clearCache(testPublicKey);
+      analyticsService.clearCache(testPublicKey);
 
       // Third call — should fetch again
       await analyticsService.getSummary(testPublicKey);

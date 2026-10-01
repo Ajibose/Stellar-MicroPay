@@ -49,7 +49,7 @@ describe("Route mount configuration", () => {
         )
         .join("\n\n");
 
-      fail(errorMessage);
+      throw new Error(errorMessage);
     }
 
     expect(duplicates.length).toBe(0);

@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, develop]
   pull_request:
-    branches: [main, emmy/main]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -15,6 +15,8 @@ jobs:
     name: Repository integrity
     runs-on: ubuntu-latest
     steps:
+      # Full history so HEAD^ resolves — actions/checkout defaults to a
+      # shallow (depth=1) clone where HEAD^ is an unknown revision.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -67,37 +69,39 @@ jobs:
   contracts:
     name: Soroban contract (check, test, WASM)
     runs-on: ubuntu-latest
+    # soroban-sdk 28's build script only accepts a wasm build when the build
+    # system declares that spec shaking happens out-of-band
+    # (SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2). `cargo check` and
+    # `cargo test` only type-check/run tests, so they set the marker here; the
+    # deployable artifact is produced by `stellar contract build` below, which
+    # sets it legitimately as part of the build.
+    env:
+      SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2: "1"
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32v1-none
       - uses: Swatinem/rust-cache@v2
-      - name: Install stellar-cli (required by soroban-sdk v28 build script)
+      - name: cargo check (wasm32v1-none)
+        run: cargo check --target wasm32v1-none
+      - run: cargo test
+      # Install stellar-cli pinned in lockstep with soroban-sdk (both 28.x):
+      # it is required to produce a deployable wasm with a correctly shaken
+      # spec, and plain `cargo build` is rejected by soroban-sdk's build script.
+      - name: Install stellar CLI
         run: |
-          if ! command -v stellar >/dev/null 2>&1; then
-            curl -sSfL -o /tmp/stellar-cli.tar.gz https://github.com/stellar/stellar-cli/releases/download/v25.2.0/stellar-cli-25.2.0-x86_64-unknown-linux-gnu.tar.gz
-            mkdir -p /tmp/stellar-cli && tar -xzf /tmp/stellar-cli.tar.gz -C /tmp/stellar-cli
-            sudo install -m 755 /tmp/stellar-cli/stellar /usr/local/bin/stellar
-          fi
+          curl -fL --retry 5 --retry-delay 5 --retry-connrefused \
+            --connect-timeout 30 --max-time 300 \
+            -o "$RUNNER_TEMP/stellar-cli.tar.gz" \
+            "https://github.com/stellar/stellar-cli/releases/download/v28.0.0/stellar-cli-28.0.0-x86_64-unknown-linux-gnu.tar.gz"
+          sudo tar xz -C /usr/local/bin -f "$RUNNER_TEMP/stellar-cli.tar.gz"
           stellar --version
-      # Run tests before the build: 'stellar contract build' writes a
-      # .cargo/config.toml pinning build-target=wasm32v1-none at the workspace
-      # root, which would otherwise force cargo test onto the wasm target and
-      # fail with E0463 (can't find crate for `core`).
-      - name: Run contract tests
-        working-directory: contracts/stellar-micropay-contract
-        run: cargo test
-      - name: Build contract WASM
-        working-directory: contracts/stellar-micropay-contract
-        run: stellar contract build
+      - name: Build release WASM
+        run: stellar contract build --locked
       - uses: actions/upload-artifact@v4
         with:
           name: stellar-micropay-contract-wasm
-          # The contract is a workspace member, so cargo emits to the
-          # workspace-root target/ rather than the crate directory.
           path: target/wasm32v1-none/release/stellar_micropay_contract.wasm
           if-no-files-found: error
 
@@ -130,13 +134,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Start stack with docker compose
-        run: |
-          if ! docker compose up -d --build --wait --wait-timeout 300; then
-            echo "::group::Container logs"
-            docker compose logs --no-color --tail=200
-            echo "::endgroup::"
-            exit 1
-          fi
+        run: docker compose up -d --build
       - name: Wait for backend healthcheck
         run: |
           for i in $(seq 1 30); do

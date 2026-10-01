@@ -1,60 +1,49 @@
 /**
  * hooks/useOnboarding.tsx
- * Tracks whether the dashboard OnboardingTour has been completed or skipped,
- * persisting that choice in localStorage so it survives a full page reload
- * (#621). Also exposes a way to manually reset the tour (e.g. from Settings)
- * so users can replay it on demand.
+ * First-run onboarding tour state, persisted in localStorage.
+ *
+ * - `showTour` is true the first time the user opens the dashboard with a
+ *   connected wallet (key #621/#625).
+ * - `completeTour`/`skipTour` dismiss it for good.
+ * - `resetOnboardingTour()` (used by Settings → Replay tour) clears the
+ *   stored flag so the tour shows again on the next dashboard visit.
  */
+
 import { useCallback, useEffect, useState } from "react";
 
-export const ONBOARDING_STORAGE_KEY = "stellar-micropay:onboarding-completed";
+const ONBOARDING_SEEN_KEY = "stellar-micropay:onboarding-seen";
 
-function readOnboardingCompleted(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return window.localStorage.getItem(ONBOARDING_STORAGE_KEY) === "true";
-  } catch {
-    return false;
-  }
+/** Clear the "tour seen" flag so the tour plays again on next dashboard visit. */
+export function resetOnboardingTour() {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(ONBOARDING_SEEN_KEY);
+}
+
+function hasSeenTour(): boolean {
+  if (typeof window === "undefined") return true;
+  return window.localStorage.getItem(ONBOARDING_SEEN_KEY) === "true";
 }
 
 /**
- * `active` gates the tour on some precondition the caller controls (e.g. a
- * wallet being connected) — the tour is only offered once `active` is true
- * and the user hasn't already completed/skipped it on this device.
+ * @param enabled Only run the tour when this is true (i.e. a wallet is connected).
  */
-export function useOnboarding(active: boolean) {
+export function useOnboarding(enabled: boolean) {
   const [showTour, setShowTour] = useState(false);
 
   useEffect(() => {
-    if (!active) return;
-    if (!readOnboardingCompleted()) {
+    if (enabled && !hasSeenTour()) {
       setShowTour(true);
     }
-  }, [active]);
+  }, [enabled]);
 
-  const dismissTour = useCallback(() => {
-    setShowTour(false);
-    try {
-      window.localStorage.setItem(ONBOARDING_STORAGE_KEY, "true");
-    } catch {
-      // Storage disabled — tour will simply re-offer next session.
+  const completeTour = useCallback(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(ONBOARDING_SEEN_KEY, "true");
     }
+    setShowTour(false);
   }, []);
 
-  return {
-    showTour,
-    completeTour: dismissTour,
-    skipTour: dismissTour,
-  };
-}
+  const skipTour = completeTour;
 
-/** Clears the persisted completion flag so the tour is offered again. */
-export function resetOnboardingTour(): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.removeItem(ONBOARDING_STORAGE_KEY);
-  } catch {
-    // ignore
-  }
+  return { showTour, completeTour, skipTour };
 }

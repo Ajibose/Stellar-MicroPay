@@ -1,72 +1,64 @@
 /**
  * lib/ToastContext.tsx
- * Global toast context for stacked, auto-dismissing notifications.
+ * App-wide toast queue. Pages call `useToastContext().addToast(msg, type)`
+ * and toasts render bottom-center with auto-dismiss.
  */
 
-import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import Toast from "@/components/Toast";
 
-export interface ToastItem {
-  id: string;
+export type ToastType = "success" | "error" | "info";
+
+interface ToastItem {
+  id: number;
   message: string;
-  type: "success" | "error" | "info";
-  onRetry?: () => void;
-  duration?: number;
+  type: ToastType;
 }
 
 interface ToastContextValue {
-  toasts: ToastItem[];
-  addToast: (
-    message: string,
-    type?: ToastItem["type"],
-    onRetry?: () => void,
-    duration?: number
-  ) => void;
-  removeToast: (id: string) => void;
+  addToast: (message: string, type?: ToastType) => void;
 }
 
-const ToastContext = createContext<ToastContextValue | undefined>(undefined);
+const ToastContext = createContext<ToastContextValue>({ addToast: () => {} });
 
-let _counter = 0;
+export function useToastContext(): ToastContextValue {
+  return useContext(ToastContext);
+}
 
-/** Provides the toast context, managing the stacked toast list and auto-dismiss timers for descendants. */
-export function ToastProvider({ children }: { children: ReactNode }) {
+export default function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const nextIdRef = useRef(1);
 
-  const removeToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-    const timer = timersRef.current.get(id);
-    if (timer) {
-      clearTimeout(timer);
-      timersRef.current.delete(id);
-    }
+  const removeToast = useCallback((id: number) => {
+    setToasts((current) => current.filter((toast) => toast.id !== id));
   }, []);
 
-  const addToast = useCallback(
-    (message: string, type: ToastItem["type"] = "info", onRetry?: () => void, duration = 4000) => {
-      const id = `toast-${++_counter}`;
-      setToasts((prev) => [...prev, { id, message, type, onRetry, duration }]);
+  const addToast = useCallback((message: string, type: ToastType = "info") => {
+    const id = nextIdRef.current++;
+    setToasts((current) => [...current.slice(-3), { id, message, type }]);
+  }, []);
 
-      const timer = setTimeout(() => removeToast(id), duration);
-      timersRef.current.set(id, timer);
-    },
-    [removeToast]
-  );
+  const value = useMemo(() => ({ addToast }), [addToast]);
 
   return (
-    <ToastContext.Provider value={{ toasts, addToast, removeToast }}>
+    <ToastContext.Provider value={value}>
       {children}
+      {toasts.map((toast) => (
+        <Toast
+          key={toast.id}
+          message={toast.message}
+          type={toast.type}
+          onClose={() => removeToast(toast.id)}
+        />
+      ))}
     </ToastContext.Provider>
   );
-}
-
-const NOOP_CTX: ToastContextValue = {
-  toasts: [],
-  addToast: () => {},
-  removeToast: () => {},
-};
-
-/** Access the toast context, falling back to a no-op implementation when used outside a ToastProvider. */
-export function useToastContext(): ToastContextValue {
-  return useContext(ToastContext) ?? NOOP_CTX;
 }

@@ -25,6 +25,7 @@ const navLinks = [
   { href: "/", label: "Home" },
   { href: "/dashboard", label: "Dashboard" },
   { href: "/trade", label: "Trade" },
+  { href: "/scheduled-payments", label: "Scheduled" },
   { href: "/transactions", label: "Transactions" },
   { href: "/leaderboard", label: "Leaderboard" },
   { href: "/network", label: "Network" },
@@ -280,14 +281,11 @@ function StarIcon({ className }: { className?: string }) {
 
 function SparkleIcon({ className }: { className?: string }) {
   return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      className={className}
-      fill="currentColor"
-      viewBox="0 0 24 24"
-    >
-      <path d="M12 2l1.9 5.6L19.5 9.5l-5.6 1.9L12 17l-1.9-5.6L4.5 9.5l5.6-1.9L12 2z" />
-      <path d="M18.5 14l.95 2.8L22.25 17.75l-2.8.95L18.5 21.5l-.95-2.8-2.8-.95 2.8-.95L18.5 14z" />
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path
+        d="M12 2L13.89 8.63L20.5 10.5L13.89 12.37L12 19L10.11 12.37L3.5 10.5L10.11 8.63L12 2Z"
+        fill="currentColor"
+      />
     </svg>
   );
 }

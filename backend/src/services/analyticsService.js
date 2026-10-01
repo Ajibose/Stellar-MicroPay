@@ -2,7 +2,8 @@
  * src/services/analyticsService.js
  * Business logic for transaction volume analytics.
  * Fetches payment data from Horizon and computes aggregated insights.
- * Includes Redis-backed caching with 5-minute TTL (falls back to in-memory).
+ * Includes Redis-backed caching with 5-minute TTL (falls back to in-memory),
+ * plus a per-key response cache with 1-hour TTL and periodic sweep (#1210).
  */
 
 "use strict";

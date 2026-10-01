@@ -24,54 +24,39 @@ services:
       - STELLAR_NETWORK=testnet
       - HORIZON_URL=https://horizon-testnet.stellar.org
       - ALLOWED_ORIGINS=http://localhost:3000
-      # Non-production default so local/compose health checks can boot without a
-      # real secret. Production images override this via the environment.
-      - JWT_SECRET=local-development-jwt-secret-change-me
+      # Dev-only placeholder so the stack boots without local secrets.
+      # The backend refuses to start without JWT_SECRET (src/middleware/auth.js).
+      - JWT_SECRET=dev-only-insecure-jwt-secret-change-me
       - REDIS_URL=redis://redis:6379
       - ANALYTICS_CACHE_TTL_MS=300000
     depends_on:
-      - redis
+      redis:
+        condition: service_started
     volumes:
       # Mount source for hot-reload via nodemon
       - ./backend:/app
       # Preserve container's node_modules
       - /app/node_modules
     healthcheck:
-      # Probe with node rather than wget: the image always ships node, and
-      # 127.0.0.1 avoids busybox resolving "localhost" to ::1 first.
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "require('http').get('http://127.0.0.1:4000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
-        ]
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health"]
       interval: 15s
       timeout: 5s
-      retries: 5
-      # The dev image installs dependencies on first boot, so allow a generous
-      # grace period before healthcheck failures start counting toward retries.
-      start_period: 180s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
-    networks:
-      - frontend
-      - backend
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 3
-      start_period: 5s
+      retries: 5
     volumes:
       - redis_data:/data
-    networks:
-      - backend
+    restart: unless-stopped
 
   frontend:
     build:
@@ -96,29 +81,12 @@ services:
       backend:
         condition: service_healthy
     healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "require('http').get('http://127.0.0.1:3000',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))",
-        ]
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 30s
     restart: unless-stopped
-    networks:
-      - frontend
-
-networks:
-  frontend:
-    driver: bridge
-  backend:
-    # Not `internal: true` — the API dials Horizon/Soroban RPC on startup and an
-    # internal-only network leaves it with no default route, so it never binds
-    # /health and the container stays unhealthy for the whole start_period.
-    driver: bridge
 
 volumes:
   redis_data:

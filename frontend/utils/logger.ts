@@ -1,27 +1,25 @@
 /**
  * utils/logger.ts
- * Minimal logger shared by frontend utilities.
- *
- * Console output is suppressed outside development so production bundles do
- * not leak diagnostic detail, while errors are always surfaced.
+ * Minimal structured logger for client-side utilities.
+ * Mirrors a pino-style call signature: logger.error(obj, message).
  */
 
-type LogLevel = "debug" | "info" | "warn" | "error";
+type LogObject = Record<string, unknown>;
 
-const isDevelopment = process.env.NODE_ENV === "development";
-
-function emit(level: LogLevel, args: unknown[]): void {
-  if (level === "error" || isDevelopment) {
-    // eslint-disable-next-line no-console
-    console[level](...args);
+function emit(level: "debug" | "info" | "warn" | "error", obj?: LogObject, msg?: string) {
+  const prefix = `[${level}]`;
+  if (obj !== undefined && msg !== undefined) {
+    console[level](prefix, msg, obj);
+  } else if (obj !== undefined) {
+    console[level](prefix, obj);
+  } else if (msg !== undefined) {
+    console[level](prefix, msg);
   }
 }
 
 export const logger = {
-  debug: (...args: unknown[]): void => emit("debug", args),
-  info: (...args: unknown[]): void => emit("info", args),
-  warn: (...args: unknown[]): void => emit("warn", args),
-  error: (...args: unknown[]): void => emit("error", args),
+  debug: (obj?: LogObject, msg?: string) => emit("debug", obj, msg),
+  info: (obj?: LogObject, msg?: string) => emit("info", obj, msg),
+  warn: (obj?: LogObject, msg?: string) => emit("warn", obj, msg),
+  error: (obj?: LogObject, msg?: string) => emit("error", obj, msg),
 };
-
-export default logger;
