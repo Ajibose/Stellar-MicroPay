@@ -11,34 +11,41 @@
 // Mock the `redis` package before any module that requires it is loaded.
 // Jest hoists `jest.mock` calls above all imports/requires, so the factory
 // is in place before cache.js runs its constructor.
-jest.mock("redis", () => {
-  const store = new Map();
-  const mockClient = {
-    on: jest.fn(),
-    connect: jest.fn().mockResolvedValue(),
-    get: jest.fn((key) => Promise.resolve(store.get(key) || null)),
-    setEx: jest.fn((key, ttl, value) => {
-      store.set(key, value);
-      return Promise.resolve("OK");
-    }),
-    del: jest.fn((keys) => {
-      const arr = Array.isArray(keys) ? keys : [keys];
-      arr.forEach((k) => store.delete(k));
-      return Promise.resolve(arr.length);
-    }),
-    keys: jest.fn((pattern) => {
-      const prefix = pattern.replace(/\*$/, "");
-      const matches = [...store.keys()].filter((k) => k.startsWith(prefix));
-      return Promise.resolve(matches);
-    }),
-  };
+// `redis` is an optional dependency, so it is not guaranteed to be installed
+// in CI. Marking the mock virtual lets this suite exercise the cache without
+// the real driver being present.
+jest.mock(
+  "redis",
+  () => {
+    const store = new Map();
+    const mockClient = {
+      on: jest.fn(),
+      connect: jest.fn().mockResolvedValue(),
+      get: jest.fn((key) => Promise.resolve(store.get(key) || null)),
+      setEx: jest.fn((key, ttl, value) => {
+        store.set(key, value);
+        return Promise.resolve("OK");
+      }),
+      del: jest.fn((keys) => {
+        const arr = Array.isArray(keys) ? keys : [keys];
+        arr.forEach((k) => store.delete(k));
+        return Promise.resolve(arr.length);
+      }),
+      keys: jest.fn((pattern) => {
+        const prefix = pattern.replace(/\*$/, "");
+        const matches = [...store.keys()].filter((k) => k.startsWith(prefix));
+        return Promise.resolve(matches);
+      }),
+    };
 
-  return {
-    createClient: jest.fn(() => mockClient),
-    __mockClient: mockClient,
-    __store: store,
-  };
-});
+    return {
+      createClient: jest.fn(() => mockClient),
+      __mockClient: mockClient,
+      __store: store,
+    };
+  },
+  { virtual: true }
+);
 
 // Mock the Stellar service so analytics functions do not hit the network.
 jest.mock("../src/services/stellarService");
