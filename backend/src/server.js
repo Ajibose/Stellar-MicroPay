@@ -5,6 +5,7 @@
 
 "use strict";
 
+const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -20,8 +21,9 @@ const healthRoutes = require("./routes/health");
 const federationRoutes = require("./routes/federation");
 const turretsRoutes = require("./routes/turrets");
 const tipsRoutes = require("./routes/tips");
-const webhooksRoutes = require("./routes/webhooks");
-const requestId = require("./middleware/requestId");
+const webhookRoutes = require("./routes/webhooks");
+const networkRoutes = require("./routes/network");
+const priceAlertsRoutes = require("./routes/priceAlerts");
 const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./swagger");
 const { startTurretsServer } = require("./turretsServer");
@@ -29,7 +31,22 @@ const { startTurretsServer } = require("./turretsServer");
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// ─── Middleware ───────────────────────────────────────────────────────────────
+/**
+ * Attach a correlation id to every request: echo the caller's X-Request-ID
+ * when supplied, otherwise generate one. The id is echoed back on the
+ * response and available to morgan and the error handler.
+ */
+function requestId(req, res, next) {
+  const supplied = req.headers["x-request-id"];
+  req.requestId =
+    typeof supplied === "string" && supplied.trim()
+      ? supplied.trim()
+      : crypto.randomUUID();
+  res.setHeader("X-Request-ID", req.requestId);
+  next();
+}
+
+// ─── Middleware ─────────────────────────────────────────────────────────────────
 
 app.use(requestId);
 app.use(helmet());
@@ -89,7 +106,9 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/health", healthRoutes);
 app.use("/api/turrets", turretsRoutes);
 app.use("/api/tips", tipsRoutes);
-app.use("/api/webhooks", webhooksRoutes);
+app.use("/api/network", networkRoutes);
+app.use("/api/price-alerts", priceAlertsRoutes);
+app.use("/api/webhooks", webhookRoutes);
 app.use("/federation", federationRoutes);
 
 // ─── API Documentation ─────────────────────────────────────────────────────────
