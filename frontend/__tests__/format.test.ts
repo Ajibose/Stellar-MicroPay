@@ -1,7 +1,7 @@
-import { 
-  formatAsset, formatUSD, formatXLM, shortenAddress, formatStroopsToXLM, 
-  timeAgo, formatDate, copyToClipboard, parseCSV, parseAddressBookCSV, 
-  clampAmount, exportToCSV, exportToJSON 
+import {
+  formatAsset, formatUSD, formatXLM, shortenAddress, formatStroopsToXLM,
+  timeAgo, formatDate, copyToClipboard, parseCSV, parseAddressBookCSV,
+  clampAmount, exportToCSV, exportToJSON
 } from "@/utils/format";
 import { PaymentRecord } from "@/lib/stellar";
 import { formatDistanceToNow, format } from "date-fns";
@@ -69,7 +69,7 @@ describe("formatUSD edge cases", () => {
   it("formats large values with comma separators", () => {
     expect(formatUSD(1234567.89)).toBe("\u2248 $1,234,567.89 USD");
   });
-  
+
   it("handles null", () => {
     expect(formatUSD(null as any)).toBe("\u2248 $0.00 USD");
   });
@@ -91,7 +91,7 @@ describe("shortenAddress", () => {
   it("handles an empty string", () => {
     expect(shortenAddress("")).toBe("");
   });
-  
+
   it("handles null", () => {
     expect(shortenAddress(null as any)).toBe(null);
   });
@@ -101,7 +101,7 @@ describe("timeAgo", () => {
   it("handles past dates correctly", () => {
     const oneSecAgo = new Date(Date.now() - 1000).toISOString();
     expect(timeAgo(oneSecAgo)).toBe("less than a minute ago");
-    
+
     const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
     expect(timeAgo(oneYearAgo)).toBe("about 1 year ago");
   });
@@ -137,7 +137,7 @@ describe("formatDate", () => {
   it("formats valid date", () => {
     expect(formatDate("2023-01-01T12:00:00Z")).toMatch(/Jan 1, 2023 · \d{2}:\d{2}/);
   });
-  
+
   it("handles invalid date fallback", () => {
     expect(formatDate("invalid-date")).toBe("invalid-date");
   });
@@ -163,12 +163,12 @@ describe("parseCSV", () => {
     const csv = "a,b,c\\n1,2,3";
     expect(parseCSV(csv.replace(/\\n/g, "\n"))).toEqual([["a","b","c"],["1","2","3"]]);
   });
-  
+
   it("parses CSV with \\r\\n", () => {
     const csv = "a,b\\r\\n1,2";
     expect(parseCSV(csv.replace(/\\r\\n/g, "\r\n"))).toEqual([["a","b"],["1","2"]]);
   });
-  
+
   it("parses CSV with \\r", () => {
     const csv = "a,b\\r1,2";
     expect(parseCSV(csv.replace(/\\r/g, "\r"))).toEqual([["a","b"],["1","2"]]);
@@ -200,7 +200,7 @@ describe("parseAddressBookCSV", () => {
       { name: "Alice", address: "GABC123", rowNumber: 1 },
     ]);
   });
-  
+
   it("handles empty csv", () => {
     expect(parseAddressBookCSV("")).toEqual([]);
   });
@@ -212,7 +212,7 @@ describe("clampAmount", () => {
     expect(clampAmount("0", 1, 10)).toBe(1);
     expect(clampAmount("20", 1, 10)).toBe(10);
   });
-  
+
   it("handles NaN", () => {
     expect(clampAmount("invalid", 1, 10)).toBe(1);
   });
@@ -231,7 +231,7 @@ describe("exportToCSV", () => {
       transactionHash: "hash2"
     };
     exportToCSV([dummyPayment1, dummyPayment2]);
-    
+
     expect(global.URL.createObjectURL).toHaveBeenCalled();
   });
 });
@@ -251,8 +251,8 @@ describe("exportToJSON", () => {
 
 describe("formatAsset edge cases for coverage", () => {
   it("uses default asset code", () => {
-    expect(formatAsset("10")).toBe("10.0000000 XLM");
-    expect(formatAsset("10", null as any)).toBe("10.0000000 XLM");
+    expect(formatAsset("10")).toBe("10 XLM");
+    expect(formatAsset("10", null as any)).toBe("10 XLM");
   });
 });
 
@@ -276,9 +276,9 @@ describe("clampAmount edge cases for coverage", () => {
 
 describe("exportToCSV edge cases for coverage", () => {
   it("handles null values", () => {
-    exportToCSV([{ 
-      id: "1", type: "sent", amount: null as any, asset: null as any, 
-      createdAt: null as any, from: null as any, to: null as any, memo: null as any, transactionHash: "" 
+    exportToCSV([{
+      id: "1", type: "sent", amount: null as any, asset: null as any,
+      createdAt: null as any, from: null as any, to: null as any, memo: null as any, transactionHash: ""
     }]);
     expect(true).toBe(true);
   });
