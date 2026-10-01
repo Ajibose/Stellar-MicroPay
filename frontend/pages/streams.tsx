@@ -8,7 +8,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useWallet } from "@/lib/useWallet";
 import { signTransactionWithWallet } from "@/lib/wallet";
 import { formatXLM } from "@/utils/format";
-import { buildPaymentTransaction, getXLMBalance, submitTransaction, STELLAR_MINIMUM_ACCOUNT_BALANCE_XLM } from "@/lib/stellar";
+import { buildPaymentTransaction, submitTransaction, getXLMBalance, STELLAR_MINIMUM_ACCOUNT_BALANCE_XLM } from "@/lib/stellar";
 
 const STROOPS_PER_XLM = 10_000_000;
 
@@ -31,7 +31,7 @@ interface NewStreamForm {
 
 export default function StreamsPage() {
   const { publicKey } = useWallet();
-  const [xlmBalance, setXlmBalance] = useState<string>("0");
+  const [xlmBalance, setXlmBalance] = useState("0");
   const [activeTab, setActiveTab] = useState<"open" | "my-streams" | "received">("open");
   const [myStreams, setMyStreams] = useState<Stream[]>([]);
   const [receivedStreams, setReceivedStreams] = useState<Stream[]>([]);
@@ -54,8 +54,8 @@ export default function StreamsPage() {
       // For now, using mock data
       setMyStreams([]);
       setReceivedStreams([]);
-    } catch (err: any) {
-      setError(err.message || "Failed to load streams");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to load streams");
     } finally {
       setLoading(false);
     }
@@ -63,15 +63,30 @@ export default function StreamsPage() {
 
   // Load streams on mount
   useEffect(() => {
-    if (publicKey) {
-      loadStreams();
-      getXLMBalance(publicKey)
-        .then(setXlmBalance)
-        .catch(() => setXlmBalance("0"));
-    } else {
+    void loadStreams();
+  }, [loadStreams]);
+
+  // Keep the native XLM balance in sync so the deposit guard below stays accurate.
+  useEffect(() => {
+    let isActive = true;
+
+    if (!publicKey) {
       setXlmBalance("0");
+      return;
     }
-  }, [publicKey, loadStreams]);
+
+    getXLMBalance(publicKey)
+      .then((balance) => {
+        if (isActive) setXlmBalance(balance);
+      })
+      .catch(() => {
+        if (isActive) setXlmBalance("0");
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [publicKey]);
 
   const handleOpenStream = async (e: React.FormEvent) => {
     e.preventDefault();
