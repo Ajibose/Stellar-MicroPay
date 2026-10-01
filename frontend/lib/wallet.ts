@@ -304,12 +304,12 @@ const LEDGER_STELLAR_PATH = "44'/148'/0'";
  */
 export const isLedgerSupported = async (): Promise<boolean> => {
   if (typeof window === "undefined") return false;
-    if (!navigator || !(navigator as any).hid) return false;
+  if (!navigator || !(navigator as any).usb) return false;
   
   try {
     // Dynamic import to avoid SSR issues
-    const TransportWebHID = (await import("@ledgerhq/hw-transport-webhid")).default;
-    return TransportWebHID.isSupported();
+    const TransportWebUSB = (await import("@ledgerhq/hw-transport-webusb")).default;
+    return TransportWebUSB.isSupported();
   } catch {
     return false;
   }
@@ -320,10 +320,10 @@ export const isLedgerSupported = async (): Promise<boolean> => {
  */
 export async function getLedgerPublicKey(): Promise<{ publicKey: string | null; error: string | null }> {
   try {
-    const TransportWebHID = (await import("@ledgerhq/hw-transport-webhid")).default;
+    const TransportWebUSB = (await import("@ledgerhq/hw-transport-webusb")).default;
     const AppStellar = (await import("@ledgerhq/hw-app-str")).default;
     
-    ledgerTransport = await TransportWebHID.create();
+    ledgerTransport = await TransportWebUSB.create();
     ledgerApp = new AppStellar(ledgerTransport);
     
     const result = await ledgerApp.getPublicKey(LEDGER_STELLAR_PATH, true);
@@ -368,10 +368,10 @@ export async function getLedgerPublicKey(): Promise<{ publicKey: string | null; 
  */
 export async function signTransactionWithLedger(xdr: string): Promise<{ signedXDR: string | null; error: string | null }> {
   try {
-    const TransportWebHID = (await import("@ledgerhq/hw-transport-webhid")).default;
+    const TransportWebUSB = (await import("@ledgerhq/hw-transport-webusb")).default;
     const AppStellar = (await import("@ledgerhq/hw-app-str")).default;
     
-    ledgerTransport = await TransportWebHID.create();
+    ledgerTransport = await TransportWebUSB.create();
     ledgerApp = new AppStellar(ledgerTransport);
     
     // hw-app-str signs the transaction signature base (a Buffer), not the raw

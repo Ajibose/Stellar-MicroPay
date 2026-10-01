@@ -14,7 +14,6 @@ import {
 interface WalletContextValue {
   publicKey: string | null;
   isWalletReady: boolean;
-  xlmBalance: string;
   connectWallet: (nextPublicKey: string) => void;
   disconnectWallet: () => void;
 }
@@ -48,7 +47,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     () => ({
       publicKey,
       isWalletReady,
-      xlmBalance: "0",
       connectWallet: (nextPublicKey: string) => {
         setPublicKey(nextPublicKey);
       },

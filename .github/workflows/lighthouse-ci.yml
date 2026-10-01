@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths: ["frontend/**", "lighthouserc.json", ".github/workflows/lighthouse-ci.yml"]
   pull_request:
-    branches: [main, emmy/main]
+    branches: [main]
     paths: ["frontend/**", "lighthouserc.json", ".github/workflows/lighthouse-ci.yml"]
   workflow_dispatch:
 

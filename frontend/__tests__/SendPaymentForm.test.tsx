@@ -2,12 +2,6 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import SendPaymentForm from '../components/SendPaymentForm';
-import * as snsResolver from '../utils/snsResolver';
-
-const snsProps = {
-    publicKey: 'GBRPYHIL2CI3WHZDTOOQFC6EB4RRJC3D5NZ2KMSUGSRNVO7ZFGIGSZ',
-    xlmBalance: '100.0000000',
-};
 
 // Mock the stellar lib module
 jest.mock('@/lib/stellar', () => ({
@@ -234,8 +228,8 @@ describe('SendPaymentForm SNS Resolution (#1197)', () => {
   it('shows resolving state and green chip upon successful .xlm lookup', async () => {
     resolveSNSDomainMock.mockResolvedValueOnce('GABCD1234EXAMPLE');
 
-    render(<SendPaymentForm {...snsProps} />);
-    const input = screen.getByPlaceholderText('G... or @username or alice.xlm');
+    render(<SendPaymentForm />);
+    const input = screen.getByPlaceholderText('G... or alice.xlm');
 
     fireEvent.change(input, { target: { value: 'alice.xlm' } });
 
@@ -249,8 +243,8 @@ describe('SendPaymentForm SNS Resolution (#1197)', () => {
   it('shows "SNS name not found" when domain is unregistered', async () => {
     resolveSNSDomainMock.mockResolvedValueOnce(null);
 
-    render(<SendPaymentForm {...snsProps} />);
-    const input = screen.getByPlaceholderText('G... or @username or alice.xlm');
+    render(<SendPaymentForm />);
+    const input = screen.getByPlaceholderText('G... or alice.xlm');
 
     fireEvent.change(input, { target: { value: 'unknown.xlm' } });
 

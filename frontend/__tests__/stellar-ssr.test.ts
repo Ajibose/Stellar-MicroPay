@@ -29,7 +29,7 @@ describe("stellar.ts SSR compatibility", () => {
     try {
       const { getNetworkConfig } = require("../lib/stellar");
       const config = getNetworkConfig();
-
+      
       expect(config).toBeDefined();
       expect(config.network).toBe("testnet"); // Default when no env vars
       expect(config.horizonUrl).toBe("https://horizon-testnet.stellar.org");
