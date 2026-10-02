@@ -4,12 +4,19 @@
  */
 
 import type { AppProps } from "next/app";
-import { useState, useEffect, createContext, useContext } from "react";
+import dynamic from "next/dynamic";
+import { useState, useEffect, createContext, useContext, useCallback } from "react";
+import { useRouter } from "next/router";
 import Head from "next/head";
 import Navbar from "@/components/Navbar";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import QuickSendModal from "@/components/QuickSendModal";
 import { WalletProvider, useWallet } from "@/lib/useWallet";
-import { I18nProvider } from "@/contexts/I18nContext";
+import ToastProvider from "@/lib/ToastContext";
+
+const AIPaymentAssistant = dynamic(() => import("@/components/AIPaymentAssistant"), {
+  ssr: false,
+});
 import {
   getStellarURIFromURL,
   registerProtocolHandler,
@@ -121,11 +128,39 @@ function AppShell({
   setIsQuickSendOpen: (isOpen: boolean) => void;
 }) {
   const { publicKey } = useWallet();
+  const router = useRouter();
+  const [isAssistantOpen, setIsAssistantOpen] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isModifierPressed = event.metaKey || event.ctrlKey;
+      if (!isModifierPressed || event.key.toLowerCase() !== "k") return;
+
+      // Only intercept the browser/OS's own Cmd/Ctrl+K when the assistant
+      // isn't already open — while it's open, AIPaymentAssistant itself
+      // owns Escape-to-close, so there's nothing else to prevent here.
+      event.preventDefault();
+      setIsAssistantOpen((open) => !open);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  const handleAssistantConfirm = useCallback(
+    (intent: { amount: string; recipient: string; memo: string }) => {
+      setIsAssistantOpen(false);
+      void router.push(
+        `/dashboard?to=${encodeURIComponent(intent.recipient)}&amount=${encodeURIComponent(intent.amount)}`
+      );
+    },
+    [router]
+  );
 
   return (
     <>
       <div className="min-h-screen bg-white bg-grid transition-colors duration-300 dark:bg-cosmos-900">
-        <Navbar />
+        <Navbar onOpenAssistant={() => setIsAssistantOpen(true)} />
         <main>
           <Component {...pageProps} stellarURI={stellarURI} />
         </main>
@@ -141,6 +176,12 @@ function AppShell({
           usdcBalance={null}
         />
       )}
+
+      <AIPaymentAssistant
+        isOpen={isAssistantOpen}
+        onClose={() => setIsAssistantOpen(false)}
+        onConfirm={handleAssistantConfirm}
+      />
     </>
   );
 }
@@ -201,9 +242,8 @@ export default function App({ Component, pageProps }: AppProps) {
 
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme }}>
-      {/* Locale is applied above the wallet so every screen can translate. */}
-      <I18nProvider>
-        <WalletProvider>
+      <WalletProvider>
+        <ToastProvider>
         <Head>
           <title>Stellar-MicroPay | Instant Micropayments</title>
           <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -242,15 +282,17 @@ export default function App({ Component, pageProps }: AppProps) {
           />
         </Head>
 
-        <AppShell
-          Component={Component}
-          pageProps={pageProps}
-          stellarURI={stellarURI}
-          isQuickSendOpen={isQuickSendOpen}
-          setIsQuickSendOpen={setIsQuickSendOpen}
-        />
-        </WalletProvider>
-      </I18nProvider>
+        <ErrorBoundary>
+          <AppShell
+            Component={Component}
+            pageProps={pageProps}
+            stellarURI={stellarURI}
+            isQuickSendOpen={isQuickSendOpen}
+            setIsQuickSendOpen={setIsQuickSendOpen}
+          />
+        </ErrorBoundary>
+        </ToastProvider>
+      </WalletProvider>
     </ThemeContext.Provider>
   );
 }
