@@ -27,7 +27,9 @@ const navLinks = [
   { href: "/", label: "Home" },
   { href: "/dashboard", label: "Dashboard" },
   { href: "/trade", label: "Trade" },
+  { href: "/scheduled-payments", label: "Scheduled" },
   { href: "/transactions", label: "Transactions" },
+  { href: "/leaderboard", label: "Leaderboard" },
   { href: "/network", label: "Network" },
   { href: "/settings", label: "Settings" },
 ];
@@ -385,6 +387,17 @@ function StarIcon({ className }: { className?: string }) {
   );
 }
 
+function SparkleIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path
+        d="M12 2L13.89 8.63L20.5 10.5L13.89 12.37L12 19L10.11 12.37L3.5 10.5L10.11 8.63L12 2Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
 function MoonIcon() {
   return (
     <svg
@@ -453,55 +466,6 @@ function CheckIcon({ className }: { className?: string }) {
       strokeWidth={2}
     >
       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-    </svg>
-  );
-}
-
-function SparkleIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      className={className || "h-4 w-4"}
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth={1.8}
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3zm6.5 12l.9 2.6L22 18.5l-2.6.9-1 2.6-1-2.6-2.6-.9 2.6-.9 1-2.6zM4 15l.9 2.6L7.5 18.5l-2.6.9-1 2.6-1-2.6-2.6-.9 2.6-.9L4 15z"
-      />
-    </svg>
-  );
-}
-
-function HamburgerIcon() {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      className="h-4 w-4"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth={2}
-    >
-      <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M4 12h16M4 17h16" />
-    </svg>
-  );
-}
-
-function CloseIcon() {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      className="h-4 w-4"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth={2}
-    >
-      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
     </svg>
   );
 }
