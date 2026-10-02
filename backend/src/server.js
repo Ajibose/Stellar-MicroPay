@@ -145,6 +145,12 @@ app.use("/federation", federationRoutes);
 
 // ─── API Documentation ─────────────────────────────────────────────────────────
 
+if (process.env.METRICS_ENABLED === "true") {
+  const client = require("prom-client");
+  client.collectDefaultMetrics();
+  app.get("/metrics", (req, res) => { res.set("Content-Type", client.register.contentType); res.end(client.register.metrics()); });
+}
+
 app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
   customSiteTitle: "Stellar MicroPay API Docs",
   customCss: ".swagger-ui .topbar { display: none }",
