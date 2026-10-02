@@ -2,8 +2,8 @@
  * src/services/analyticsService.js
  * Business logic for transaction volume analytics.
  * Fetches payment data from Horizon and computes aggregated insights.
- * Includes in-memory caching with 5-minute TTL, LRU eviction, and a periodic
- * per-key response cache for archived analytics entries (#1210).
+ * Includes in-memory caching with 5-minute TTL plus a per-key response
+ * cache with 1-hour TTL and periodic sweep (#1210).
  */
 
 "use strict";
@@ -175,28 +175,32 @@ async function getActivityByDay(publicKey) {
  * @returns {number} Number of cache entries invalidated.
  */
 function clearCache(publicKey) {
-  const prefixes = [
-    `summary:${publicKey}`,
-    `top-recipients:${publicKey}`,
-    `activity:${publicKey}`,
-  ];
-
-  let invalidated = 0;
-  for (const key of prefixes) {
-    if (cache.delete(key)) {
-      invalidated++;
-    }
-  }
-
-  return invalidated;
-}
+  cache.delete(`summary:${publicKey}`);
+  cache.delete(`top-recipients:${publicKey}`);
+  cache.delete(`activity:${publicKey}`);
+}module.exports = {
+  getSummary,
+  getTopRecipients,
+  getActivityByDay,
+  clearCache,
+  getCachedAnalytics,
+  setCachedAnalytics,
+  clearAnalyticsCache,
+  stopCacheSweep,
+};
 
 // ─── Per-key analytics response cache with periodic sweep (#1210) ──────────
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 const SWEEP_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+
+// Map structure: key -> { data, timestamp }
 const analyticsCache = new Map();
 
+/**
+ * Evict entries older than the TTL and log how many were removed.
+ * @returns {number} Number of evicted entries.
+ */
 function sweepCache() {
   const now = Date.now();
   let evictedCount = 0;
@@ -215,11 +219,13 @@ function sweepCache() {
   return evictedCount;
 }
 
+// Start the periodic background sweep; unref'd so it never blocks exit.
 const sweepIntervalId = setInterval(sweepCache, SWEEP_INTERVAL_MS);
 if (sweepIntervalId.unref) {
   sweepIntervalId.unref();
 }
 
+/** Stop the periodic background sweep (used by tests). */
 function stopCacheSweep() {
   clearInterval(sweepIntervalId);
 }
@@ -229,6 +235,8 @@ function getCachedAnalytics(publicKey) {
   if (!entry) return null;
 
   if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+    // Lazily sweep on access so stale entries are evicted and logged
+    // even between background sweeps.
     sweepCache();
     return null;
   }
@@ -246,15 +254,3 @@ function setCachedAnalytics(publicKey, data) {
 function clearAnalyticsCache() {
   analyticsCache.clear();
 }
-
-module.exports = {
-  getSummary,
-  getTopRecipients,
-  getActivityByDay,
-  clearCache,
-  getCachedAnalytics,
-  setCachedAnalytics,
-  clearAnalyticsCache,
-  stopCacheSweep,
-};
-
