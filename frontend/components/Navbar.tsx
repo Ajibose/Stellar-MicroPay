@@ -21,10 +21,12 @@ import { useWallet } from "@/lib/useWallet";
 import { useTheme } from "@/pages/_app";
 import { copyToClipboard } from "@/utils/format";
 
+/** Nav entries carry an i18n key so labels follow the active locale (#1145). */
 const navLinks = [
   { href: "/", label: "Home" },
   { href: "/dashboard", label: "Dashboard" },
   { href: "/trade", label: "Trade" },
+  { href: "/scheduled-payments", label: "Scheduled" },
   { href: "/transactions", label: "Transactions" },
   { href: "/leaderboard", label: "Leaderboard" },
   { href: "/network", label: "Network" },
@@ -40,6 +42,7 @@ export default function Navbar({ onOpenAssistant }: NavbarProps) {
   const router = useRouter();
   const { publicKey, connectWallet, disconnectWallet } = useWallet();
   const { theme, toggleTheme } = useTheme();
+  const { t } = useTranslation();
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
   const [copied, setCopied] = useState(false);
   const [feeLevel, setFeeLevel] = useState<FeeLevel | null>(null);
@@ -163,7 +166,7 @@ export default function Navbar({ onOpenAssistant }: NavbarProps) {
                     : "text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-slate-200"
                 )}
               >
-                {link.label}
+                {t(link.labelKey)}
               </Link>
             ))}
           </div>
@@ -233,11 +236,13 @@ export default function Navbar({ onOpenAssistant }: NavbarProps) {
                 aria-label="Show disconnect confirmation"
                 className="shrink-0 px-2 py-1 text-xs text-slate-500 transition-colors hover:text-slate-300"
               >
-                Disconnect
+                {t("navbar.disconnect")}
               </button>
               {showDisconnectConfirm && (
                 <div className="flex items-center gap-1 rounded-lg border border-amber-400/30 bg-amber-400/10 px-2 py-1">
-                  <span className="text-[11px] text-amber-300">Disconnect wallet?</span>
+                  <span className="text-[11px] text-amber-300">
+                    {t("navbar.disconnectConfirm")}
+                  </span>
                   <button
                     onClick={() => {
                       setShowDisconnectConfirm(false);
@@ -245,20 +250,20 @@ export default function Navbar({ onOpenAssistant }: NavbarProps) {
                     }}
                     className="rounded px-1.5 py-0.5 text-[11px] text-red-300 hover:bg-red-500/20"
                   >
-                    Confirm
+                    {t("navbar.confirm")}
                   </button>
                   <button
                     onClick={() => setShowDisconnectConfirm(false)}
                     className="rounded px-1.5 py-0.5 text-[11px] text-slate-200 hover:bg-white/10"
                   >
-                    Cancel
+                    {t("navbar.cancel")}
                   </button>
                 </div>
               )}
             </div>
           ) : (
             <button onClick={handleConnectClick} className="btn-primary px-4 py-2 text-sm">
-              Connect Wallet
+              {t("navbar.connectWallet")}
             </button>
           )}
         </div>
@@ -272,6 +277,17 @@ function StarIcon({ className }: { className?: string }) {
     <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
       <path
         d="M12 2L14.09 8.26L21 9L15.5 14.14L17.18 21L12 17.77L6.82 21L8.5 14.14L3 9L9.91 8.26L12 2Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function SparkleIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path
+        d="M12 2L13.89 8.63L20.5 10.5L13.89 12.37L12 19L10.11 12.37L3.5 10.5L10.11 8.63L12 2Z"
         fill="currentColor"
       />
     </svg>
