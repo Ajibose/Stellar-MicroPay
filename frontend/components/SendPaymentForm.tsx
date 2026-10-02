@@ -6,6 +6,7 @@
  * Emmy123222/Stellar-MicroPay
  */
 
+import ContactPickerModal from "@/components/ContactPickerModal";
 import PaymentStatusModal, {
   type PaymentFlowStatus,
   type PaymentStepId,
@@ -170,6 +171,7 @@ export default function SendPaymentForm({
   const [federationResolvedAddress, setFederationResolvedAddress] = useState<string | null>(null);
   const [federationError, setFederationError] = useState<string | null>(null);
   const federationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [isContactPickerOpen, setIsContactPickerOpen] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -934,6 +936,18 @@ export default function SendPaymentForm({
                     <QrCodeIcon className="h-5 w-5" />
                   </button>
                 )}
+                {status === "idle" && (
+                  <button
+                    type="button"
+                    onClick={() => setIsContactPickerOpen(true)}
+                    className="text-slate-400 hover:text-white"
+                    title="Pick from address book"
+                    aria-label="Pick from address book"
+                    data-testid="open-contact-picker"
+                  >
+                    <ContactsIcon className="h-5 w-5" />
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1238,6 +1252,15 @@ export default function SendPaymentForm({
         onConfirm={() => { setIsConfirmOpen(false); executeSend(); }}
       />
 
+      <ContactPickerModal
+        isOpen={isContactPickerOpen}
+        onSelect={(contact) => {
+          setDestination(contact.address);
+          setIsContactPickerOpen(false);
+        }}
+        onClose={() => setIsContactPickerOpen(false)}
+      />
+
       <PaymentStatusModal
         isOpen={isStatusModalOpen}
         status={status}
@@ -1296,6 +1319,14 @@ function StarIcon({ className, filled }: { className?: string; filled?: boolean 
   return (
     <svg className={className} fill={filled ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.382-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+    </svg>
+  );
+}
+
+function ContactsIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
     </svg>
   );
 }
