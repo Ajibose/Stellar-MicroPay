@@ -93,18 +93,22 @@ pub struct Stream {
 
 ### Claimable Amount Calculation
 ```
-elapsed_ledgers = current_ledger - start_ledger
-total_streamed = rate_per_ledger * elapsed_ledgers
-claimable = total_streamed - claimed
-actual_claim = min(claimable, deposited - claimed)
+elapsed_ledgers = current_ledger - start_ledger // ledgers elapsed since start
+total_streamed = rate_per_ledger * elapsed_ledgers // amount accrued to date
+claimable = total_streamed - claimed // accrued funds not yet claimed
+actual_claim = min(claimable, deposited - claimed) // cap at funds still deposited
 ```
+With zero elapsed ledgers, nothing new is claimable. Once the deposit is exhausted,
+the remaining-deposit cap keeps further claims at zero.
 
 ### Refund Calculation
 ```
-elapsed_ledgers = current_ledger - start_ledger
-total_streamed = rate_per_ledger * elapsed_ledgers
-refundable = deposited - max(total_streamed, claimed)
+elapsed_ledgers = current_ledger - start_ledger // ledgers elapsed since start
+total_streamed = rate_per_ledger * elapsed_ledgers // amount accrued to date
+refundable = deposited - max(total_streamed, claimed) // funds neither streamed nor claimed
 ```
+With zero elapsed ledgers and no prior claims, the full deposit is refundable.
+When the stream is exhausted, the maximum reaches the deposit and the refund is zero.
 
 ## Usage Examples
 
