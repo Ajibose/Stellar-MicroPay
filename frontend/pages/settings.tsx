@@ -22,6 +22,9 @@ export default function SettingsPage() {
   const [customUrl, setCustomUrl] = useState("");
   const [showMainnetWarning, setShowMainnetWarning] = useState(false);
   const [pendingNetwork, setPendingNetwork] = useState<"testnet" | "mainnet" | "custom" | null>(null);
+  const [fiatCurrency, setFiatCurrency] = useState<string>("USD");
+  useEffect(() => { setFiatCurrency(localStorage.getItem("stellar-micropay:fiat") || "USD"); }, []);
+  const changeFiatCurrency = (code: string) => { setFiatCurrency(code); localStorage.setItem("stellar-micropay:fiat", code); };
 
   // Username registration state
   const [username, setUsername] = useState("");
