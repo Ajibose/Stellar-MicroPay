@@ -95,18 +95,17 @@ async function resolveUsername(req, res, next) {
 }
 
 /**
- * GET /api/accounts/:publicKey/memo-history
- * Fetch recently used distinct memo texts for an account.
+ * GET /api/accounts/:publicKey/has-usdc-trustline
+ * Returns { hasTrustline: boolean }.
  */
-async function getMemoHistory(req, res, next) {
+async function hasUSDCTrustline(req, res, next) {
   try {
     const { publicKey } = req.params;
-    const memos = await stellarService.getMemoHistory(publicKey);
-    res.json({ success: true, data: memos });
+    const hasTrustline = await stellarService.hasUSDCTrustline(publicKey);
+    res.json({ hasTrustline });
   } catch (err) {
     next(err);
   }
 }
 
-module.exports = { getAccount, getBalance, getStreaks, registerUsername, resolveUsername, getMemoHistory };
-
+module.exports = { getAccount, getBalance, registerUsername, resolveUsername, hasUSDCTrustline };

@@ -75,12 +75,12 @@ async function withTimeoutAndRetry(fn, timeoutMs = DEFAULT_TIMEOUT_MS) {
 
 const server = new Horizon.Server(HORIZON_URL);
 
-/** @type {Map<string, { value: object, expiresAt: number }>} */
-const streaksCache = new Map();
-
-function clearStreaksCache() {
-  streaksCache.clear();
-}
+const USDC_ISSUERS = new Set(
+  (process.env.USDC_ISSUER || "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
 
 // ─── Account ──────────────────────────────────────────────────────────────────
 
@@ -133,110 +133,33 @@ async function getXLMBalance(publicKey) {
 }
 
 /**
- * Get account streaks based on last 200 payments
+ * Check whether an account has a USDC trustline.
+ * Returns true if any balance entry has asset_code === "USDC".
  */
-async function getAccountStreaks(publicKey) {
+async function hasUSDCTrustline(publicKey) {
   validatePublicKey(publicKey);
 
-  const cached = streaksCache.get(publicKey);
-  if (cached) {
-    if (Date.now() <= cached.expiresAt) {
-      // LRU: re-insert to move to end
-      streaksCache.delete(publicKey);
-      streaksCache.set(publicKey, cached);
-      return cached.value;
-    }
-    streaksCache.delete(publicKey);
-  }
-
-  const query = server.payments().forAccount(publicKey).limit(200).order("desc");
-  const result = await withTimeoutAndRetry(() => query.call());
-
-  const dates = new Set();
-  let lastTransactionDate = null;
-
-  for (const op of result.records) {
-    if (!PAYMENT_TYPES.has(op.type)) continue;
-    if (!lastTransactionDate) {
-      lastTransactionDate = op.created_at;
-    }
-    const d = new Date(op.created_at);
-    const dateStr = d.toISOString().split("T")[0];
-    dates.add(dateStr);
-  }
-
-  const sortedDates = Array.from(dates).sort((a, b) => b.localeCompare(a));
-
-  let currentStreak = 0;
-  let longestStreak = 0;
-
-  if (sortedDates.length > 0) {
-    const today = new Date();
-    const todayStr = today.toISOString().split("T")[0];
-    
-    const yesterday = new Date(today);
-    yesterday.setDate(today.getDate() - 1);
-    const yesterdayStr = yesterday.toISOString().split("T")[0];
-
-    // Current streak
-    if (sortedDates[0] === todayStr || sortedDates[0] === yesterdayStr) {
-      currentStreak = 1;
-      let prevDate = new Date(sortedDates[0]);
-      for (let i = 1; i < sortedDates.length; i++) {
-        const d = new Date(sortedDates[i]);
-        const diffDays = Math.round((prevDate.getTime() - d.getTime()) / (1000 * 3600 * 24));
-        if (diffDays === 1) {
-          currentStreak++;
-          prevDate = d;
-        } else {
-          break;
-        }
+  try {
+    const account = await server.loadAccount(publicKey);
+    return (account.balances || []).some((b) => {
+      if (b.asset_type === "native") return false;
+      if (b.asset_code !== "USDC") return false;
+      // If USDC_ISSUER allowlist is configured, enforce it; otherwise accept any USDC issuer.
+      if (USDC_ISSUERS.size > 0 && b.asset_issuer && !USDC_ISSUERS.has(b.asset_issuer)) {
+        return false;
       }
+      return true;
+    });
+  } catch (err) {
+    if (err?.response?.status === 404) {
+      const error = new Error(
+        "Account not found. It may not be funded yet. Use Friendbot on testnet."
+      );
+      error.status = 404;
+      throw error;
     }
-
-    // Longest streak
-    let max = 0;
-    let currentCount = 0;
-    let prev = null;
-
-    for (let i = 0; i < sortedDates.length; i++) {
-      const d = new Date(sortedDates[i]);
-      if (!prev) {
-        currentCount = 1;
-        prev = d;
-        max = 1;
-      } else {
-        const diffDays = Math.round((prev.getTime() - d.getTime()) / (1000 * 3600 * 24));
-        if (diffDays === 1) {
-          currentCount++;
-          prev = d;
-        } else {
-          currentCount = 1;
-          prev = d;
-        }
-        if (currentCount > max) {
-          max = currentCount;
-        }
-      }
-    }
-    longestStreak = max;
+    throw err;
   }
-
-  const streaksData = {
-    currentStreak,
-    longestStreak,
-    lastTransactionDate,
-  };
-
-  if (streaksCache.size >= STREAKS_CACHE_MAX) {
-    streaksCache.delete(streaksCache.keys().next().value);
-  }
-  streaksCache.set(publicKey, {
-    value: streaksData,
-    expiresAt: Date.now() + STREAKS_CACHE_TTL_MS,
-  });
-
-  return streaksData;
 }
 
 // ─── Payments ─────────────────────────────────────────────────────────────────
@@ -294,49 +217,48 @@ async function getPayments(publicKey, { limit = 20, cursor } = {}) {
 }
 
 /**
- * Get N most-recently used distinct MEMO_TEXT memos for an account.
+ * Submit a signed transaction envelope to Horizon.
  *
- * @param {string} publicKey - Stellar public key (G...)
- * @param {object} [options]
- * @param {number} [options.limit=10] - Maximum number of distinct memos to return
- * @returns {Promise<string[]>} List of distinct memo strings
+ * @param {string} signedXDR - Base64 signed transaction XDR.
+ * @returns {Promise<{ hash: string, ledger: number, successful: boolean }>}
  */
-async function getMemoHistory(publicKey, { limit = 10 } = {}) {
-  validatePublicKey(publicKey);
-
-  const query = server.payments().forAccount(publicKey).limit(200).order("desc");
-  const result = await withTimeoutAndRetry(() => query.call());
-
-  const distinctMemos = [];
-  const seen = new Set();
-
-  for (const op of result.records) {
-    if (!PAYMENT_TYPES.has(op.type)) continue;
-
-    let memoText;
-    try {
-      const tx = typeof op.transaction === "function" ? await op.transaction() : op.transaction;
-      if (tx && (tx.memo_type === "text" || tx.memo_type === "MEMO_TEXT") && tx.memo) {
-        memoText = tx.memo;
-      }
-    } catch {
-      // memo is optional
-    }
-
-    if (!memoText && (op.memo_type === "text" || op.memo_type === "MEMO_TEXT") && op.memo) {
-      memoText = op.memo;
-    }
-
-    if (memoText && !seen.has(memoText)) {
-      seen.add(memoText);
-      distinctMemos.push(memoText);
-      if (distinctMemos.length >= limit) {
-        break;
-      }
-    }
+async function submitTransaction(signedXDR) {
+  if (!signedXDR || typeof signedXDR !== "string") {
+    const error = new Error("signedXDR is required");
+    error.status = 400;
+    throw error;
   }
 
-  return distinctMemos;
+  // Resolved lazily so the SDK surface is only touched when submitting.
+  const { TransactionBuilder, Networks } = require("@stellar/stellar-sdk");
+  const networkPassphrase =
+    process.env.STELLAR_NETWORK === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
+
+  let transaction;
+  try {
+    transaction = TransactionBuilder.fromXDR(signedXDR, networkPassphrase);
+  } catch {
+    const error = new Error("Invalid transaction XDR");
+    error.status = 400;
+    throw error;
+  }
+
+  try {
+    const result = await server.submitTransaction(transaction);
+    return {
+      hash: result.hash,
+      ledger: result.ledger,
+      successful: result.successful !== false,
+    };
+  } catch (err) {
+    const resultCodes = err?.response?.data?.extras?.result_codes;
+    if (resultCodes) {
+      const error = new Error(`Transaction failed: ${JSON.stringify(resultCodes)}`);
+      error.status = 400;
+      throw error;
+    }
+    throw err;
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -353,9 +275,7 @@ module.exports = {
   getAccount,
   getXLMBalance,
   getPayments,
-  getMemoHistory,
+  hasUSDCTrustline,
+  submitTransaction,
   validatePublicKey,
-  clearStreaksCache,
-  getAccountStreaks,
 };
-

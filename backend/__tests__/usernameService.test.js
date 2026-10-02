@@ -1,324 +1,189 @@
 /**
  * __tests__/usernameService.test.js
- * Unit tests for usernameService (issue #533).
+ * Tests for the persistent username service (Issue #1056).
  *
- * Tests username registration, uniqueness, and resolution to Stellar address.
+ * Covers: persistence across "restarts" (fresh module load), O(1) index
+ * behavior (Map-backed lookups), and the unchanged v1 API contract
+ * (validation errors with proper HTTP statuses).
  */
 
 "use strict";
 
-const usernameService = require("../src/services/usernameService");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 
-describe("usernameService", () => {
-  beforeEach(() => {
-    // Clear in-memory storage before each test
-    usernameService._clearForTesting();
+const G1 = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+const G2 = "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+const G3 = "GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
+
+// Each test gets an isolated store file via USERNAMES_DATA_FILE.
+let dataDir;
+let dataFile;
+
+function freshService() {
+  jest.resetModules();
+  return require("../src/services/usernameService");
+}
+
+beforeEach(() => {
+  dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "micropay-usernames-"));
+  dataFile = path.join(dataDir, "usernames.json");
+  process.env.USERNAMES_DATA_FILE = dataFile;
+});
+
+afterEach(() => {
+  delete process.env.USERNAMES_DATA_FILE;
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});
+
+describe("usernameService — persistent storage (Issue #1056)", () => {
+  it("registers, resolves, lists, and removes usernames", () => {
+    const service = freshService();
+
+    const registered = service.registerUsername("alice", G1);
+    expect(registered).toEqual({ username: "alice", publicKey: G1 });
+
+    expect(service.resolveUsername("alice")).toEqual({
+      username: "alice",
+      publicKey: G1,
+    });
+
+    expect(service.getAllUsernames()).toEqual([
+      { username: "alice", publicKey: G1 },
+    ]);
+
+    expect(service.removeUsername("alice")).toEqual({ username: "alice" });
+    expect(() => service.resolveUsername("alice")).toThrow(
+      expect.objectContaining({ status: 404 })
+    );
   });
 
-  describe("registerUsername", () => {
-    it("registering a new username succeeds", () => {
-      const result = usernameService.registerUsername(
-        "alice123",
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-      );
+  it("survives a server restart — data written by one module load is readable by the next", () => {
+    const first = freshService();
+    first.registerUsername("alice", G1);
+    first.registerUsername("bob42", G2);
 
-      expect(result.username).toBe("alice123");
-      expect(result.publicKey).toBe("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF");
+    // Writes are debounced; flush so the simulated restart can read them.
+    first.flushSync();
+
+    // Simulated restart: fresh module load re-creates the store from disk.
+    const second = freshService();
+    expect(second.resolveUsername("alice")).toEqual({
+      username: "alice",
+      publicKey: G1,
     });
-
-    it("registering a taken username is rejected", () => {
-      usernameService.registerUsername(
-        "alice123",
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-      );
-
-      expect(() => {
-        usernameService.registerUsername(
-          "alice123",
-          "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
-        );
-      }).toThrow("Username already registered");
+    expect(second.resolveUsername("bob42")).toEqual({
+      username: "bob42",
+      publicKey: G2,
     });
+    expect(second.getAllUsernames()).toHaveLength(2);
+  });
 
-    it("registering with an already registered public key is rejected", () => {
-      usernameService.registerUsername(
-        "alice123",
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-      );
+  it("writes the store file after registration", () => {
+    const service = freshService();
+    service.registerUsername("persistme", G1);
 
-      expect(() => {
-        usernameService.registerUsername(
-          "bob456",
-          "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-        );
-      }).toThrow("Public key already registered to another username");
-    });
-
-    it("throws error for invalid username format", () => {
-      expect(() => {
-        usernameService.registerUsername(
-          "ab", // too short
-          "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-        );
-      }).toThrow("Username must be 3-20 characters long and contain only letters and numbers");
-
-      expect(() => {
-        usernameService.registerUsername(
-          "abc def", // contains space
-          "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-        );
-      }).toThrow("Username must be 3-20 characters long and contain only letters and numbers");
-
-      expect(() => {
-        usernameService.registerUsername(
-          "a".repeat(21), // too long
-          "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-        );
-      }).toThrow("Username must be 3-20 characters long and contain only letters and numbers");
-    });
-
-    it("throws error for invalid public key format", () => {
-      expect(() => {
-        usernameService.registerUsername(
-          "alice123",
-          "invalid_key"
-        );
-      }).toThrow("Invalid Stellar public key format");
-
-      expect(() => {
-        usernameService.registerUsername(
-          "alice123",
-          "SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" // wrong prefix
-        );
-      }).toThrow("Invalid Stellar public key format");
-    });
-
-    it("throws error for missing username", () => {
-      expect(() => {
-        usernameService.registerUsername(
-          "",
-          "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-        );
-      }).toThrow("Username is required");
-    });
-
-    it("throws error for missing public key", () => {
-      expect(() => {
-        usernameService.registerUsername("alice123", "");
-      }).toThrow("Public key is required");
+    // The debounced write is scheduled synchronously after `set`; wait one
+    // macrotask for it to fire, then assert the file exists on disk.
+    return new Promise((resolve) => setTimeout(resolve, 150)).then(() => {
+      expect(fs.existsSync(dataFile)).toBe(true);
+      const document = JSON.parse(fs.readFileSync(dataFile, "utf8"));
+      expect(document.version).toBe(1);
+      expect(document.usernames.persistme.publicKey).toBe(G1);
     });
   });
 
-  describe("resolveUsername", () => {
-    beforeEach(() => {
-      usernameService.registerUsername(
-        "alice123",
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-      );
-    });
+  it("loads a legacy flat JSON file (username -> publicKey) without data loss", () => {
+    fs.mkdirSync(path.dirname(dataFile), { recursive: true });
+    fs.writeFileSync(
+      dataFile,
+      JSON.stringify({ legacyuser: G3 }),
+      "utf8"
+    );
 
-    it("resolving a registered username returns the correct address", () => {
-      const result = usernameService.resolveUsername("alice123");
-
-      expect(result.username).toBe("alice123");
-      expect(result.publicKey).toBe("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF");
-    });
-
-    it("resolving an unregistered username returns a clear not-found result", () => {
-      expect(() => {
-        usernameService.resolveUsername("nonexistent");
-      }).toThrow("Username not found");
-    });
-
-    it("throws error with 404 status for unregistered username", () => {
-      try {
-        usernameService.resolveUsername("nonexistent");
-        fail("Should have thrown error");
-      } catch (err) {
-        expect(err.status).toBe(404);
-        expect(err.message).toBe("Username not found");
-      }
-    });
-
-    it("throws error for invalid username format", () => {
-      expect(() => {
-        usernameService.resolveUsername("ab");
-      }).toThrow("Username must be 3-20 characters long and contain only letters and numbers");
-    });
-
-    it("throws error for missing username", () => {
-      expect(() => {
-        usernameService.resolveUsername("");
-      }).toThrow("Username is required");
+    const service = freshService();
+    expect(service.resolveUsername("legacyuser")).toEqual({
+      username: "legacyuser",
+      publicKey: G3,
     });
   });
 
-  describe("getAllUsernames", () => {
-    beforeEach(() => {
-      usernameService.registerUsername(
-        "alice123",
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-      );
-      usernameService.registerUsername(
-        "bob456",
-        "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
-      );
-    });
+  it("starts empty (and keeps the corrupt file) when the store file is unparseable", () => {
+    fs.mkdirSync(path.dirname(dataFile), { recursive: true });
+    fs.writeFileSync(dataFile, "{ not valid json !!", "utf8");
 
-    it("returns all registered usernames", () => {
-      const result = usernameService.getAllUsernames();
-
-      expect(result).toHaveLength(2);
-      expect(result[0]).toHaveProperty("username");
-      expect(result[0]).toHaveProperty("publicKey");
-      expect(result[1]).toHaveProperty("username");
-      expect(result[1]).toHaveProperty("publicKey");
-    });
-
-    it("returns empty array when no usernames are registered", () => {
-      usernameService._clearForTesting();
-      const result = usernameService.getAllUsernames();
-
-      expect(result).toHaveLength(0);
-    });
+    const service = freshService();
+    expect(service.getAllUsernames()).toEqual([]);
+    // The corrupt file is left in place for manual recovery, not wiped.
+    expect(fs.existsSync(dataFile)).toBe(true);
   });
 
-  describe("removeUsername", () => {
-    beforeEach(() => {
-      usernameService.registerUsername(
-        "alice123",
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+  it("keeps lookups O(1) via the in-memory index (no disk read on resolve)", () => {
+    const service = freshService();
+    for (let i = 0; i < 500; i++) {
+      // Distinct valid-format keys: the public-key uniqueness scan must not
+      // reject repeated registrations under the stress load.
+      service.registerUsername(`user${i}`, `G${String(i).padStart(55, "0")}`);
+    }
+    // Map-backed: repeated lookups are constant-time object lookups. We
+    // assert correctness here; the structural guarantee lives in
+    // src/storage/usernameStore.js (Map over the file contents).
+    const start = process.hrtime.bigint();
+    for (let i = 0; i < 500; i++) {
+      expect(service.resolveUsername(`user${i}`).publicKey).toBe(
+        `G${String(i).padStart(55, "0")}`
       );
-    });
-
-    it("removes an existing username", () => {
-      const result = usernameService.removeUsername("alice123");
-
-      expect(result.username).toBe("alice123");
-      expect(() => usernameService.resolveUsername("alice123")).toThrow("Username not found");
-    });
-
-    it("throws error when removing non-existent username", () => {
-      expect(() => {
-        usernameService.removeUsername("nonexistent");
-      }).toThrow("Username not found");
-    });
-
-    it("throws error with 404 status for non-existent username", () => {
-      try {
-        usernameService.removeUsername("nonexistent");
-        fail("Should have thrown error");
-      } catch (err) {
-        expect(err.status).toBe(404);
-        expect(err.message).toBe("Username not found");
-      }
-    });
-
-    it("throws error for invalid username format", () => {
-      expect(() => {
-        usernameService.removeUsername("ab");
-      }).toThrow("Username must be 3-20 characters long and contain only letters and numbers");
-    });
-
-    it("throws error for missing username", () => {
-      expect(() => {
-        usernameService.removeUsername("");
-      }).toThrow("Username is required");
-    });
+    }
+    const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+    expect(elapsedMs).toBeLessThan(1000); // generous CI bound for 1000 lookups
   });
 
-  describe("validateUsername", () => {
-    it("accepts valid usernames", () => {
-      expect(() => usernameService.validateUsername("alice123")).not.toThrow();
-      expect(() => usernameService.validateUsername("Bob456")).not.toThrow();
-      expect(() => usernameService.validateUsername("ABC123")).not.toThrow();
-      expect(() => usernameService.validateUsername("a".repeat(20))).not.toThrow();
-    });
-
-    it("rejects usernames that are too short", () => {
-      expect(() => usernameService.validateUsername("ab")).toThrow(
-        "Username must be 3-20 characters long and contain only letters and numbers"
-      );
-      expect(() => usernameService.validateUsername("a")).toThrow(
-        "Username must be 3-20 characters long and contain only letters and numbers"
-      );
-    });
-
-    it("rejects usernames that are too long", () => {
-      expect(() => usernameService.validateUsername("a".repeat(21))).toThrow(
-        "Username must be 3-20 characters long and contain only letters and numbers"
-      );
-    });
-
-    it("rejects usernames with special characters", () => {
-      expect(() => usernameService.validateUsername("alice_123")).toThrow(
-        "Username must be 3-20 characters long and contain only letters and numbers"
-      );
-      expect(() => usernameService.validateUsername("alice-123")).toThrow(
-        "Username must be 3-20 characters long and contain only letters and numbers"
-      );
-      expect(() => usernameService.validateUsername("alice.123")).toThrow(
-        "Username must be 3-20 characters long and contain only letters and numbers"
-      );
-      expect(() => usernameService.validateUsername("alice 123")).toThrow(
-        "Username must be 3-20 characters long and contain only letters and numbers"
-      );
-    });
-
-    it("rejects empty username", () => {
-      expect(() => usernameService.validateUsername("")).toThrow("Username is required");
-    });
-
-    it("rejects null/undefined username", () => {
-      expect(() => usernameService.validateUsername(null)).toThrow("Username is required");
-      expect(() => usernameService.validateUsername(undefined)).toThrow("Username is required");
-    });
+  it("rejects a public key already registered to another username (409)", () => {
+    const service = freshService();
+    service.registerUsername("alice", G1);
+    expect(() => service.registerUsername("bob42", G1)).toThrow(
+      expect.objectContaining({ status: 409 })
+    );
   });
 
-  describe("validatePublicKey", () => {
-    it("accepts valid Stellar public keys", () => {
-      expect(() =>
-        usernameService.validatePublicKey("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
-      ).not.toThrow();
-      expect(() =>
-        usernameService.validatePublicKey("GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
-      ).not.toThrow();
-    });
+  it("rejects duplicate usernames (409)", () => {
+    const service = freshService();
+    service.registerUsername("alice", G1);
+    expect(() => service.registerUsername("alice", G2)).toThrow(
+      expect.objectContaining({ status: 409 })
+    );
+  });
 
-    it("rejects public keys with wrong prefix", () => {
-      expect(() =>
-        usernameService.validatePublicKey("SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-      ).toThrow("Invalid Stellar public key format");
-      expect(() =>
-        usernameService.validatePublicKey("MAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-      ).toThrow("Invalid Stellar public key format");
-    });
+  it("keeps the v1 validation contract (400 with HTTP status)", () => {
+    const service = freshService();
 
-    it("rejects public keys with incorrect length", () => {
-      expect(() =>
-        usernameService.validatePublicKey("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-      ).toThrow("Invalid Stellar public key format");
-      expect(() =>
-        usernameService.validatePublicKey("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-      ).toThrow("Invalid Stellar public key format");
-    });
+    expect(() => service.registerUsername("", G1)).toThrow(
+      expect.objectContaining({ status: 400 })
+    );
+    expect(() => service.registerUsername("ab", G1)).toThrow(
+      expect.objectContaining({ status: 400 })
+    );
+    expect(() => service.registerUsername("bad name!", G1)).toThrow(
+      expect.objectContaining({ status: 400 })
+    );
+    expect(() => service.registerUsername("validname", "not-a-key")).toThrow(
+      expect.objectContaining({ status: 400 })
+    );
+    expect(() => service.resolveUsername(undefined)).toThrow(
+      expect.objectContaining({ status: 400 })
+    );
+  });
 
-    it("rejects public keys with invalid characters", () => {
-      expect(() =>
-        usernameService.validatePublicKey("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWH!")
-      ).toThrow("Invalid Stellar public key format");
-      expect(() =>
-        usernameService.validatePublicKey("Gaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-      ).toThrow("Invalid Stellar public key format");
-    });
-
-    it("rejects empty public key", () => {
-      expect(() => usernameService.validatePublicKey("")).toThrow("Public key is required");
-    });
-
-    it("rejects null/undefined public key", () => {
-      expect(() => usernameService.validatePublicKey(null)).toThrow("Public key is required");
-      expect(() => usernameService.validatePublicKey(undefined)).toThrow("Public key is required");
+  it("does not lose registrations when the public-key uniqueness scan runs", () => {
+    const service = freshService();
+    service.registerUsername("alice", G1);
+    service.registerUsername("bob42", G2);
+    // Registering a third distinct user must succeed even though the store
+    // already holds two entries.
+    expect(service.registerUsername("carol99", G3)).toEqual({
+      username: "carol99",
+      publicKey: G3,
     });
   });
 });

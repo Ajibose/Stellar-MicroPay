@@ -5,12 +5,19 @@
 
 "use strict";
 
+const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
 require("dotenv").config();
+
+// ─── Env Validation ───────────────────────────────────────────────────────────
+// Must run immediately after dotenv so missing vars are caught before any
+// service or route module tries to use them.
+const { validateEnv } = require("./validateEnv");
+validateEnv();
 
 const accountRoutes = require("./routes/accounts");
 const authRoutes = require("./routes/auth");
@@ -20,90 +27,38 @@ const healthRoutes = require("./routes/health");
 const federationRoutes = require("./routes/federation");
 const turretsRoutes = require("./routes/turrets");
 const tipsRoutes = require("./routes/tips");
+const webhookRoutes = require("./routes/webhooks");
+const networkRoutes = require("./routes/network");
+const priceAlertsRoutes = require("./routes/priceAlerts");
 const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./swagger");
 const { startTurretsServer } = require("./turretsServer");
+const { sanitizeRequest } = require("./middleware/sanitization");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// ─── Middleware ───────────────────────────────────────────────────────────────
-
-app.set('trust proxy', true);
-
-// Enforce HTTPS in production (redirect HTTP to HTTPS)
-app.use((req, res, next) => {
-  if (process.env.NODE_ENV === 'production' && req.headers['x-forwarded-proto'] !== 'https' && req.protocol !== 'https') {
-    return res.redirect(`https://${req.get('host')}${req.originalUrl}`);
-  }
-  next();
-});
-
-// Remove the framework fingerprint header (helmet also does this, but disabling
-// at the Express level guarantees it even if helmet config changes).
-app.disable("x-powered-by");
-
 /**
- * Content-Security-Policy directives for this JSON API.
- *
- * The backend serves no HTML pages of its own except Swagger UI at /api/docs,
- * so the policy is intentionally restrictive:
- *
- *  defaultSrc  – block everything not listed explicitly.
- *  scriptSrc   – only same-origin scripts (Swagger UI bundles its own JS).
- *  styleSrc    – same-origin + unsafe-inline (Swagger UI injects inline styles).
- *  imgSrc      – same-origin + data URIs (Swagger UI logo).
- *  connectSrc  – only same-origin fetch/XHR (all API calls go to self).
- *  fontSrc     – same-origin only.
- *  objectSrc   – none (no Flash / plugins).
- *  frameSrc    – none (not embedded in iframes).
- *  upgradeInsecureRequests – omitted intentionally; handled at the load-balancer
- *                            level in production.
- *
- * Helmet v7+ ships with CSP *disabled* by default, so this must be explicit.
+ * Attach a correlation id to every request: echo the caller's X-Request-ID
+ * when supplied, otherwise generate one. The id is echoed back on the
+ * response and available to morgan and the error handler.
  */
-const helmetOptions = {
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", "data:"],
-      connectSrc: ["'self'"],
-      fontSrc: ["'self'"],
-      objectSrc: ["'none'"],
-      frameSrc: ["'none'"],
-      // Disallow this API from being framed by any site (clickjacking defence,
-      // the CSP-level equivalent of X-Frame-Options: DENY).
-      frameAncestors: ["'none'"],
-      // Forbid <base> tag hijacking and form posts to third-party origins.
-      baseUri: ["'self'"],
-      formAction: ["'self'"],
-    },
-  },
-  // HTTP Strict Transport Security — force HTTPS for two years, cover subdomains,
-  // and allow browser-preload-list inclusion. TLS is terminated at the
-  // load-balancer, so the header is emitted here for clients that reach us
-  // directly over HTTPS.
-  hsts: {
-    maxAge: 63072000, // 2 years
-    includeSubDomains: true,
-    preload: true,
-  },
-  // Send no referrer to other origins (avoids leaking API paths / tokens in
-  // Referer headers).
-  referrerPolicy: { policy: "no-referrer" },
-  // This JSON API should never be embedded cross-origin, nor share its window.
-  crossOriginResourcePolicy: { policy: "same-site" },
-  crossOriginOpenerPolicy: { policy: "same-origin" },
-  // Belt-and-braces clickjacking header for older clients that ignore CSP.
-  frameguard: { action: "deny" },
-  // Block Adobe cross-domain policy files.
-  permittedCrossDomainPolicies: { permittedPolicies: "none" },
-};
+function requestId(req, res, next) {
+  const supplied = req.headers["x-request-id"];
+  req.requestId =
+    typeof supplied === "string" && supplied.trim()
+      ? supplied.trim()
+      : crypto.randomUUID();
+  res.setHeader("X-Request-ID", req.requestId);
+  next();
+}
 
-app.use(helmet(helmetOptions));
-app.use(morgan("dev"));
+// ─── Middleware ─────────────────────────────────────────────────────────────────
+
+app.use(requestId);
+app.use(helmet());
+morgan.token("request-id", (req) => req.requestId);
+app.use(morgan(":method :url :status :response-time ms requestId=:request-id"));
 app.use(express.json({ limit: "10kb" }));
 
 // JSON parsing error handler
@@ -111,8 +66,14 @@ app.use((err, req, res, next) => {
   if (err instanceof SyntaxError && err.status === 400 && "body" in err) {
     return res.status(400).json({ error: "Invalid JSON body" });
   }
-  next();
+  // Forward other body-parser errors (e.g. 413 payload too large) so they are
+  // not silently swallowed and the request does not reach the route handlers.
+  next(err);
 });
+
+// Global input sanitization — trims strings and rejects null bytes on every
+// route. Must be mounted before the route handlers below.
+app.use(sanitizeRequest);
 
 // CORS
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:3000")
@@ -129,9 +90,12 @@ app.use(
         callback(new Error(`CORS: origin ${origin} not allowed`));
       }
     },
-    methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    methods: ["GET", "POST", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID", "X-Idempotency-Key"],
+    exposedHeaders: ["X-Request-ID", "X-Idempotency-Replayed"],
     credentials: true,
+    optionsSuccessStatus: 204,
+    maxAge: 600,
   })
 );
 
@@ -155,6 +119,9 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/health", healthRoutes);
 app.use("/api/turrets", turretsRoutes);
 app.use("/api/tips", tipsRoutes);
+app.use("/api/webhooks", webhookRoutes);
+app.use("/api/network", networkRoutes);
+app.use("/api/price-alerts", priceAlertsRoutes);
 app.use("/federation", federationRoutes);
 
 // ─── API Documentation ─────────────────────────────────────────────────────────
@@ -177,6 +144,8 @@ app.use((err, req, res, next) => {
   const status = err.status || 500;
   const message = err.message || "Internal Server Error";
 
+  console.error({ requestId: req.requestId, status, message });
+
   res.status(status).json({ error: message });
 });
 
@@ -195,7 +164,7 @@ SERVER = "https://${domain}/federation"
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 if (require.main === module) {
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`
   ✨ Stellar MicroPay API
   🚀 Server running at http://localhost:${PORT}
@@ -204,6 +173,18 @@ if (require.main === module) {
   });
 
   startTurretsServer();
+
+  const shutdown = () => {
+    console.log("Shutting down... clearing timers.");
+    const { stopRunner } = require("./services/turretsService");
+    stopRunner();
+    server.close(() => {
+      process.exit(0);
+    });
+  };
+
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 }
 
 module.exports = app;
