@@ -78,8 +78,8 @@ app.use(
       }
     },
     methods: ["GET", "POST", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID"],
-    exposedHeaders: ["X-Request-ID"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID", "X-Idempotency-Key"],
+    exposedHeaders: ["X-Request-ID", "X-Idempotency-Replayed"],
     credentials: true,
     optionsSuccessStatus: 204,
     maxAge: 600,

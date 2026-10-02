@@ -132,6 +132,44 @@ Fetch payment history for an account.
 
 ---
 
+### `POST /api/payments/submit`
+
+Submit a signed payment transaction to Horizon. Safe to retry: send a
+client-generated UUID in the `X-Idempotency-Key` header and repeated requests
+within 24 hours replay the original response instead of submitting twice.
+
+**Headers**
+| Name | Required | Description |
+|------|----------|-------------|
+| `X-Idempotency-Key` | No | UUID (e.g. `crypto.randomUUID()`). Replays the cached response on retry. |
+
+**Body**
+```json
+{ "signedXDR": "AAAA...signed transaction envelope" }
+```
+
+**Response (200)**
+```json
+{
+  "success": true,
+  "data": {
+    "hash": "abc123...",
+    "ledger": 42,
+    "successful": true
+  }
+}
+```
+
+When a key is reused within 24 hours the cached response is returned with the
+`X-Idempotency-Replayed: true` header and no second submission occurs.
+
+**Errors**
+| Status | Meaning |
+|--------|---------|
+| 400 | Missing `signedXDR`, invalid XDR, or malformed idempotency key |
+
+---
+
 ### `GET /api/payments/:publicKey/stats`
 
 Return aggregate statistics for an account.
