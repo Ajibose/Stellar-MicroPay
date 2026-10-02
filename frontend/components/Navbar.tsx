@@ -43,6 +43,7 @@ export default function Navbar({ onOpenAssistant }: NavbarProps) {
   const { theme, toggleTheme } = useTheme();
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [feeLevel, setFeeLevel] = useState<FeeLevel | null>(null);
 
   const handleCopyAddress = async () => {
@@ -235,7 +236,7 @@ export default function Navbar({ onOpenAssistant }: NavbarProps) {
               onClick={onOpenAssistant}
               title="Open AI payment assistant (Cmd+K / Ctrl+K)"
               aria-label="Open AI payment assistant. Keyboard shortcut: Command K on Mac, Control K on Windows and Linux."
-              className="hidden h-9 items-center gap-1.5 rounded-lg border border-stellar-500/20 bg-stellar-500/5 px-3 text-xs font-medium text-stellar-400 transition-colors hover:bg-stellar-500/10 sm:inline-flex"
+              className="hidden h-9 items-center gap-1.5 rounded-lg border border-stellar-500/20 bg-stellar-500/5 px-3 text-xs font-medium text-stellar-400 transition-colors hover:bg-stellar-500/10 md:flex"
             >
               <SparkleIcon className="h-3.5 w-3.5" />
               Ask AI
@@ -250,7 +251,7 @@ export default function Navbar({ onOpenAssistant }: NavbarProps) {
             aria-label={
               theme === "dark" ? "Switch to light mode" : "Switch to dark mode"
             }
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-300/30 bg-white/90 text-slate-700 shadow-sm transition-all duration-200 hover:bg-slate-100 dark:border-slate-700/50 dark:bg-cosmos-800/80 dark:text-slate-100 dark:hover:bg-cosmos-700/90"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-300/30 bg-white/90 text-slate-700 shadow-sm transition-all duration-200 hover:bg-slate-100 dark:border-slate-600/30 dark:bg-slate-800/80 dark:text-slate-200 dark:hover:bg-slate-700/80"
           >
             {theme === "dark" ? <MoonIcon /> : <SunIcon />}
           </button>
@@ -271,7 +272,7 @@ export default function Navbar({ onOpenAssistant }: NavbarProps) {
                   onClick={handleCopyAddress}
                   aria-label="Copy wallet address"
                   title="Copy wallet address"
-                  className="flex items-center justify-center p-0.5 text-slate-400 hover:text-white transition-colors cursor-pointer rounded"
+                  className="flex cursor-pointer items-center justify-center rounded p-0.5 text-slate-400 transition-colors hover:text-white"
                 >
                   {copied ? (
                     <CheckIcon className="h-3.5 w-3.5 text-emerald-400" />
@@ -281,7 +282,7 @@ export default function Navbar({ onOpenAssistant }: NavbarProps) {
                 </button>
                 {copied && (
                   <span
-                    className="absolute -bottom-8 left-1/2 -translate-x-1/2 rounded bg-slate-800 px-2 py-0.5 text-[10px] font-medium text-emerald-400 border border-emerald-400/20 shadow-md animate-fade-in z-50 whitespace-nowrap"
+                    className="absolute -bottom-8 left-1/2 -translate-x-1/2 rounded border border-emerald-400/20 bg-slate-800 px-2 py-0.5 text-[10px] font-medium text-emerald-400 shadow-md"
                     role="status"
                   >
                     Copied!
@@ -331,7 +332,7 @@ export default function Navbar({ onOpenAssistant }: NavbarProps) {
             aria-label={
               isMobileMenuOpen ? "Close navigation menu" : "Open navigation menu"
             }
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300/30 bg-white/90 text-slate-700 shadow-sm transition-all duration-200 hover:bg-slate-100 md:hidden dark:border-slate-700/50 dark:bg-cosmos-800/80 dark:text-slate-100 dark:hover:bg-cosmos-700/90"
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300/30 bg-white/90 text-slate-700 shadow-sm transition-all duration-200 hover:bg-slate-100 md:hidden dark:border-slate-600/30 dark:bg-slate-800/80 dark:text-slate-200 dark:hover:bg-slate-700/80"
           >
             {isMobileMenuOpen ? <CloseIcon /> : <HamburgerIcon />}
           </button>
@@ -456,3 +457,51 @@ function CheckIcon({ className }: { className?: string }) {
   );
 }
 
+function SparkleIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      className={className || "h-4 w-4"}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.8}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3zm6.5 12l.9 2.6L22 18.5l-2.6.9-1 2.6-1-2.6-2.6-.9 2.6-.9 1-2.6zM4 15l.9 2.6L7.5 18.5l-2.6.9-1 2.6-1-2.6-2.6-.9 2.6-.9L4 15z"
+      />
+    </svg>
+  );
+}
+
+function HamburgerIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      className="h-4 w-4"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M4 12h16M4 17h16" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      className="h-4 w-4"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+    </svg>
+  );
+}
