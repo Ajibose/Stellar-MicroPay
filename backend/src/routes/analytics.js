@@ -8,26 +8,17 @@
 const express = require("express");
 const router = express.Router();
 const { strictLimiter } = require("../middleware/rateLimit");
-const { validatePublicKey } = require("../middleware/sanitization");
+const { verifyJWT } = require("../middleware/auth");
+const { validatePublicKey, sanitizePublicKey } = require("../middleware/sanitization");
 const analyticsController = require("../controllers/analyticsController");
 
-// Only accounts listed in ADMIN_PUBLIC_KEYS may invalidate the cache.
-/**
- * Returns the configured admin public keys.
- * Read per-request (not cached at module load) so runtime config changes apply.
- * @returns {string[]}
- */
 function getAdminPublicKeys() {
   return (process.env.ADMIN_PUBLIC_KEYS || "")
     .split(",")
-    .map((k) => k.trim())
+    .map((key) => key.trim())
     .filter(Boolean);
 }
 
-/**
- * Restricts access to admin-configured public keys.
- * Must run after verifyJWT so req.user is populated.
- */
 function requireAdmin(req, res, next) {
   const adminPublicKeys = getAdminPublicKeys();
   if (adminPublicKeys.length === 0) {
@@ -85,3 +76,4 @@ router.delete(
 );
 
 module.exports = router;
+

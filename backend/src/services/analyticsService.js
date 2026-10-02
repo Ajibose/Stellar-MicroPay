@@ -2,40 +2,33 @@
  * src/services/analyticsService.js
  * Business logic for transaction volume analytics.
  * Fetches payment data from Horizon and computes aggregated insights.
- * Includes in-memory caching with 5-minute TTL and LRU eviction.
+ * Includes in-memory caching with 5-minute TTL, LRU eviction, and a periodic
+ * per-key response cache for archived analytics entries (#1210).
  */
 
 "use strict";
 
 const stellarService = require("./stellarService");
+const logger = require("../utils/logger");
 
 // ─── Cache Configuration ──────────────────────────────────────────────────────
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes in milliseconds
-const CACHE_MAX_SIZE = parseInt(process.env.ANALYTICS_CACHE_MAX_SIZE, 10) || 500;
+const CACHE_MAX_SIZE = Number.parseInt(process.env.ANALYTICS_CACHE_MAX_SIZE, 10) || 500;
+const cache = new Map();
 
 /**
  * LRU cache backed by a Map. JavaScript Maps preserve insertion order, so
  * re-inserting an entry (delete + set) moves it to the end of the iteration
- * order and the oldest entry can be evicted from the front. This bounds
- * memory usage and evicts least-recently-used accounts first.
- */
-const cache = new Map();
-
-/**
- * Insert or refresh a cache entry, marking it as most-recently-used and
- * evicting the least-recently-used entry when the cache is over capacity.
- * @param {string} key
- * @param {*} data
+ * order and the oldest entry can be evicted from the front.
  */
 function setCacheEntry(key, data) {
-  // Delete first so re-inserting an existing key refreshes its position.
   cache.delete(key);
   cache.set(key, { data, timestamp: Date.now() });
 
-  // Evict least-recently-used entries while over capacity.
   while (cache.size > CACHE_MAX_SIZE) {
     const oldestKey = cache.keys().next().value;
+    if (oldestKey === undefined) break;
     cache.delete(oldestKey);
   }
 }
@@ -48,19 +41,13 @@ function setCacheEntry(key, data) {
 async function withCache(key, fn) {
   const cached = cache.get(key);
 
-  // Return cached data if still fresh
   if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    // Refresh recency so frequently-used entries are not evicted.
     setCacheEntry(key, cached.data);
     return cached.data;
   }
 
-  // Fetch fresh data
   const data = await fn();
-
-  // Update cache
   setCacheEntry(key, data);
-
   return data;
 }
 
@@ -113,35 +100,28 @@ async function getSummary(publicKey) {
 async function getTopRecipients(publicKey) {
   return withCache(`top-recipients:${publicKey}`, async () => {
     const payments = await stellarService.getPayments(publicKey, { limit: 200 });
-
-    // Map to track total sent per recipient
     const recipientTotals = new Map();
 
     for (const payment of payments) {
-      // Only count sent payments
       if (payment.type === "sent") {
         const amount = parseFloat(payment.amount);
         const recipient = payment.to;
 
         if (recipientTotals.has(recipient)) {
-          recipientTotals.set(
-            recipient,
-            recipientTotals.get(recipient) + amount
-          );
+          recipientTotals.set(recipient, recipientTotals.get(recipient) + amount);
         } else {
           recipientTotals.set(recipient, amount);
         }
       }
     }
 
-    // Convert to array and sort by amount (descending)
     const sorted = Array.from(recipientTotals.entries())
       .map(([address, total]) => ({
         address,
         totalXLMSent: total.toFixed(7),
       }))
       .sort((a, b) => parseFloat(b.totalXLMSent) - parseFloat(a.totalXLMSent))
-      .slice(0, 5); // Top 5 only
+      .slice(0, 5);
 
     return {
       publicKey,
@@ -159,25 +139,22 @@ async function getActivityByDay(publicKey) {
   return withCache(`activity:${publicKey}`, async () => {
     const payments = await stellarService.getPayments(publicKey, { limit: 200 });
 
-    // Initialize counters for all 7 days
     const dayActivity = {
-      0: 0, // Sunday
-      1: 0, // Monday
-      2: 0, // Tuesday
-      3: 0, // Wednesday
-      4: 0, // Thursday
-      5: 0, // Friday
-      6: 0, // Saturday
+      0: 0,
+      1: 0,
+      2: 0,
+      3: 0,
+      4: 0,
+      5: 0,
+      6: 0,
     };
 
-    // Count transactions by day of week
     for (const payment of payments) {
       const date = new Date(payment.createdAt);
       const dayOfWeek = date.getUTCDay();
       dayActivity[dayOfWeek]++;
     }
 
-    // Convert to array format
     const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
     const activity = days.map((dayName, index) => ({
       day: dayName,
@@ -193,10 +170,9 @@ async function getActivityByDay(publicKey) {
 }
 
 /**
- * Clear cache for a specific public key (optional helper).
- * Useful for manual cache invalidation if needed.
+ * Clear cache for a specific public key.
  * @param {string} publicKey
- * @returns {number} Number of cache entries invalidated for this key.
+ * @returns {number} Number of cache entries invalidated.
  */
 function clearCache(publicKey) {
   const prefixes = [
@@ -211,7 +187,64 @@ function clearCache(publicKey) {
       invalidated++;
     }
   }
+
   return invalidated;
+}
+
+// ─── Per-key analytics response cache with periodic sweep (#1210) ──────────
+
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const SWEEP_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+const analyticsCache = new Map();
+
+function sweepCache() {
+  const now = Date.now();
+  let evictedCount = 0;
+
+  for (const [key, entry] of analyticsCache.entries()) {
+    if (now - entry.timestamp > CACHE_TTL_MS) {
+      analyticsCache.delete(key);
+      evictedCount++;
+    }
+  }
+
+  if (evictedCount > 0) {
+    logger.info(`Cache sweep: evicted ${evictedCount} entries`);
+  }
+
+  return evictedCount;
+}
+
+const sweepIntervalId = setInterval(sweepCache, SWEEP_INTERVAL_MS);
+if (sweepIntervalId.unref) {
+  sweepIntervalId.unref();
+}
+
+function stopCacheSweep() {
+  clearInterval(sweepIntervalId);
+}
+
+function getCachedAnalytics(publicKey) {
+  const entry = analyticsCache.get(publicKey);
+  if (!entry) return null;
+
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+    sweepCache();
+    return null;
+  }
+
+  return entry.data;
+}
+
+function setCachedAnalytics(publicKey, data) {
+  analyticsCache.set(publicKey, {
+    data,
+    timestamp: Date.now(),
+  });
+}
+
+function clearAnalyticsCache() {
+  analyticsCache.clear();
 }
 
 module.exports = {
@@ -219,4 +252,9 @@ module.exports = {
   getTopRecipients,
   getActivityByDay,
   clearCache,
+  getCachedAnalytics,
+  setCachedAnalytics,
+  clearAnalyticsCache,
+  stopCacheSweep,
 };
+

@@ -27,6 +27,14 @@ const options = {
       },
     ],
     components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "JWT",
+          description: "SEP-0010 JWT obtained from POST /api/auth",
+        },
+      },
       schemas: {
         Error: {
           type: "object",
@@ -499,9 +507,7 @@ const options = {
                       success: { type: "boolean" },
                       data: {
                         type: "array",
-                        items: {
-                          $ref: "#/components/schemas/TopRecipient",
-                        },
+                        items: { $ref: "#/components/schemas/TopRecipient" },
                       },
                     },
                   },
@@ -728,7 +734,7 @@ const options = {
               properties: { url: { type: "string", format: "uri" }, publicKey: { type: "string" }, secret: { type: "string", format: "password" } },
             } } },
           },
-          responses: { 201: { description: "Webhook registered", content: { "application/json": { schema: { $ref: "#/components/schemas/SuccessResponse" } } } }, 400: { description: "Invalid registration" } },
+          responses: { 201: { description: "Webhook registered", content: { "application/json": { schema: { $ref: "#/components/schemas/SuccessResponse" } } } }, 400: { description: "Invalid registration payload" } },
         },
       },
       "/api/webhooks/{id}": {
@@ -787,13 +793,5 @@ const options = {
   apis: [],
 };
 
-options.definition.components.securitySchemes = {
-  bearerAuth: {
-    type: "http",
-    scheme: "bearer",
-    bearerFormat: "JWT",
-    description: "SEP-0010 JWT obtained from POST /api/auth",
-  },
-};
-
 module.exports = swaggerJsdoc(options);
+

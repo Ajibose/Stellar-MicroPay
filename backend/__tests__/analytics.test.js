@@ -5,8 +5,13 @@
 
 "use strict";
 
+const request = require("supertest");
+const jwt = require("jsonwebtoken");
 const analyticsService = require("../src/services/analyticsService");
 const stellarService = require("../src/services/stellarService");
+const loggerModule = require("../src/utils/logger");
+const { JWT_SECRET } = require("../src/middleware/auth");
+const { setCachedAnalytics, getCachedAnalytics, clearAnalyticsCache, stopCacheSweep } = analyticsService;
 
 // Mock Stellar service
 jest.mock("../src/services/stellarService");
@@ -14,13 +19,12 @@ jest.mock("../src/services/stellarService");
 describe("Analytics Service", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    // Clear cache for each test
+    clearAnalyticsCache();
     analyticsService.clearCache("GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJLVXKJ46ZGFWTTNQNXNHTJXW");
   });
 
   const testPublicKey = "GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJLVXKJ46ZGFWTTNQNXNHTJXW";
 
-  // Mock payment data
   const mockPayments = [
     {
       id: "1",
@@ -91,13 +95,11 @@ describe("Analytics Service", () => {
       const result = await analyticsService.getSummary(testPublicKey);
 
       expect(result).toHaveProperty("publicKey", testPublicKey);
-      expect(result).toHaveProperty("totalSentXLM", "175.0000000"); // 100 + 50 + 25
-      expect(result).toHaveProperty("totalReceivedXLM", "275.0000000"); // 200 + 75
+      expect(result).toHaveProperty("totalSentXLM", "175.0000000");
+      expect(result).toHaveProperty("totalReceivedXLM", "275.0000000");
       expect(result).toHaveProperty("uniqueCounterparties", 4);
       expect(result).toHaveProperty("averageTransactionSize");
       expect(result).toHaveProperty("totalTransactions", 5);
-
-      // Average = (175 + 275) / 5 = 90
       expect(parseFloat(result.averageTransactionSize)).toBeCloseTo(90, 5);
     });
 
@@ -131,16 +133,12 @@ describe("Analytics Service", () => {
       const result = await analyticsService.getTopRecipients(testPublicKey);
 
       expect(result).toHaveProperty("publicKey", testPublicKey);
-      expect(result.topRecipients).toHaveLength(2); // Only 2 unique recipients in mock data
+      expect(result.topRecipients).toHaveLength(2);
       expect(result.count).toBe(2);
-
-      // First recipient should have total of 150 (100 + 50)
       expect(result.topRecipients[0]).toEqual({
         address: "GBUQWP3BOUZX34ULNQG23RQ6F4BWFIYGJ2DN5ZKQYTROZXNUAAOXWS7",
         totalXLMSent: "150.0000000",
       });
-
-      // Second recipient should have total of 25
       expect(result.topRecipients[1]).toEqual({
         address: "GBUQWP3BOUZX34ULNQG23RQ6F4BWFIYGJ2DN5ZKQYTROZXNUAAOXWS8",
         totalXLMSent: "25.0000000",
@@ -152,7 +150,6 @@ describe("Analytics Service", () => {
 
       const result = await analyticsService.getTopRecipients(testPublicKey);
 
-      // Should only count sent payments (3), received payments should be ignored
       expect(result.topRecipients.length).toBeLessThanOrEqual(5);
       result.topRecipients.forEach((recipient) => {
         expect(recipient.address).toBeDefined();
@@ -213,7 +210,6 @@ describe("Analytics Service", () => {
       expect(result).toHaveProperty("publicKey", testPublicKey);
       expect(result.activityByDay).toHaveLength(7);
 
-      // Days should be in order Sunday through Saturday
       const dayNames = [
         "Sunday",
         "Monday",
@@ -236,12 +232,11 @@ describe("Analytics Service", () => {
 
       const result = await analyticsService.getActivityByDay(testPublicKey);
 
-      // Jan 1, 2024 = Monday, Jan 2 = Tuesday, Jan 3 = Wednesday, Jan 4 = Thursday, Jan 10 = Wednesday
       const totalCount = result.activityByDay.reduce(
         (sum, day) => sum + day.transactionCount,
         0
       );
-      expect(totalCount).toBe(5); // Total transactions in mockPayments
+      expect(totalCount).toBe(5);
     });
 
     it("should handle empty payment history", async () => {
@@ -270,18 +265,14 @@ describe("Analytics Service", () => {
     it("should clear cached data for a public key", async () => {
       stellarService.getPayments.mockResolvedValue(mockPayments);
 
-      // First call — should fetch from service
       await analyticsService.getSummary(testPublicKey);
       expect(stellarService.getPayments).toHaveBeenCalledTimes(1);
 
-      // Second call — should use cache
       await analyticsService.getSummary(testPublicKey);
       expect(stellarService.getPayments).toHaveBeenCalledTimes(1);
 
-      // Clear cache
       analyticsService.clearCache(testPublicKey);
 
-      // Third call — should fetch again
       await analyticsService.getSummary(testPublicKey);
       expect(stellarService.getPayments).toHaveBeenCalledTimes(2);
     });
@@ -293,65 +284,48 @@ describe("Analytics Service", () => {
       await analyticsService.getTopRecipients(testPublicKey);
       await analyticsService.getActivityByDay(testPublicKey);
 
-      // All three entries cached for this key
       expect(analyticsService.clearCache(testPublicKey)).toBe(3);
-
-      // Nothing left to clear
       expect(analyticsService.clearCache(testPublicKey)).toBe(0);
     });
   });
 
   describe("LRU eviction", () => {
     it("should evict the least recently used entries beyond the max size", async () => {
-      // Unique keys per account so each account occupies its own cache entries
-      const accountCount = 600; // above the default max of 500
+      const accountCount = 600;
       const accounts = Array.from({ length: accountCount }, (_, i) =>
         `GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJLVXKJ46ZGFWTTNQNXNHTJX${String(i).padStart(2, "0")}`
       );
 
       stellarService.getPayments.mockResolvedValue([]);
 
-      // Populate cache entries (summary only → one entry per account)
       for (const publicKey of accounts) {
         await analyticsService.getSummary(publicKey);
       }
 
-      // Re-touch the very first account so it becomes most recently used
       await analyticsService.getSummary(accounts[0]);
-
-      // Add one more entry to push eviction beyond the 500 cap
       await analyticsService.getSummary("GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJLVXKJ46ZGFWTTNQNXNHTJXZZ");
 
-      // The LRU entry (accounts[1], untouched) must have been evicted.
-      // accounts[0] was re-touched, so it must still be cached.
       const callsAfterPopulate = stellarService.getPayments.mock.calls.length;
       await analyticsService.getSummary(accounts[0]);
-      // No additional fetch: served from cache despite being the oldest-inserted key.
       expect(stellarService.getPayments).toHaveBeenCalledTimes(callsAfterPopulate);
 
-      // An evicted account must be fetched again.
       await analyticsService.getSummary(accounts[1]);
       expect(stellarService.getPayments).toHaveBeenCalledTimes(callsAfterPopulate + 1);
     });
   });
 
   describe("admin cache invalidation endpoint", () => {
-    const request = require("supertest");
-    const jwt = require("jsonwebtoken");
-    const { JWT_SECRET } = require("../src/middleware/auth");
     let app;
-
-    beforeAll(() => {
-      app = require("../src/server");
-    });
-
-    // Route-level sanitization requires exactly 56 chars starting with "G".
     const endpointKey = "GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJLVXKJ46ZGFWTTNQNXNHTJXW2";
 
     function authHeaderFor(publicKey) {
       const token = jwt.sign({ publicKey }, JWT_SECRET, { expiresIn: "1h" });
       return `Bearer ${token}`;
     }
+
+    beforeAll(() => {
+      app = require("../src/server");
+    });
 
     it("returns 401 without a JWT", async () => {
       const res = await request(app).delete(`/api/analytics/cache/${testPublicKey}`);
@@ -370,15 +344,12 @@ describe("Analytics Service", () => {
       process.env.ADMIN_PUBLIC_KEYS = endpointKey;
       stellarService.getPayments.mockResolvedValue(mockPayments);
 
-      // Warm the cache
       await analyticsService.getSummary(endpointKey);
       expect(stellarService.getPayments).toHaveBeenCalledTimes(1);
 
-      // Served from cache
       await analyticsService.getSummary(endpointKey);
       expect(stellarService.getPayments).toHaveBeenCalledTimes(1);
 
-      // Admin invalidates the cache via the endpoint
       const res = await request(app)
         .delete(`/api/analytics/cache/${endpointKey}`)
         .set("Authorization", authHeaderFor(endpointKey));
@@ -388,7 +359,6 @@ describe("Analytics Service", () => {
         data: { publicKey: endpointKey, invalidated: 1 },
       });
 
-      // Next call must hit the service again
       await analyticsService.getSummary(endpointKey);
       expect(stellarService.getPayments).toHaveBeenCalledTimes(2);
     });
@@ -402,3 +372,38 @@ describe("Analytics Service", () => {
     });
   });
 });
+
+describe("Analytics Service Cache Archiving (#1210)", () => {
+  beforeEach(() => {
+    clearAnalyticsCache();
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    stopCacheSweep();
+    jest.useRealTimers();
+  });
+
+  it("evicts entries older than 1 hour during sweep and logs eviction count", () => {
+    const logSpy = jest.spyOn(loggerModule, "info").mockImplementation(() => {});
+
+    setCachedAnalytics("G_TEST_USER_1", { volume: 100 });
+    expect(getCachedAnalytics("G_TEST_USER_1")).toEqual({ volume: 100 });
+
+    jest.advanceTimersByTime(61 * 60 * 1000);
+    jest.advanceTimersByTime(10 * 60 * 1000);
+
+    expect(getCachedAnalytics("G_TEST_USER_1")).toBeNull();
+    expect(logSpy).toHaveBeenCalledWith("Cache sweep: evicted 1 entries");
+
+    logSpy.mockRestore();
+  });
+
+  it("stops cache sweep correctly when stopCacheSweep is called", () => {
+    const clearIntervalSpy = jest.spyOn(global, "clearInterval");
+    stopCacheSweep();
+    expect(clearIntervalSpy).toHaveBeenCalled();
+    clearIntervalSpy.mockRestore();
+  });
+});
+
