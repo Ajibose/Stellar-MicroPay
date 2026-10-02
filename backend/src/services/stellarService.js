@@ -14,6 +14,13 @@ const HORIZON_URL =
 
 const server = new Horizon.Server(HORIZON_URL);
 
+const USDC_ISSUERS = new Set(
+  (process.env.USDC_ISSUER || "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
+
 // ─── Account ──────────────────────────────────────────────────────────────────
 
 /**
@@ -90,6 +97,36 @@ async function getXLMBalance(publicKey) {
   return xlm ? xlm.balance : "0";
 }
 
+/**
+ * Check whether an account has a USDC trustline.
+ * Returns true if any balance entry has asset_code === "USDC".
+ */
+async function hasUSDCTrustline(publicKey) {
+  validatePublicKey(publicKey);
+
+  try {
+    const account = await server.loadAccount(publicKey);
+    return (account.balances || []).some((b) => {
+      if (b.asset_type === "native") return false;
+      if (b.asset_code !== "USDC") return false;
+      // If USDC_ISSUER allowlist is configured, enforce it; otherwise accept any USDC issuer.
+      if (USDC_ISSUERS.size > 0 && b.asset_issuer && !USDC_ISSUERS.has(b.asset_issuer)) {
+        return false;
+      }
+      return true;
+    });
+  } catch (err) {
+    if (err?.response?.status === 404) {
+      const error = new Error(
+        "Account not found. It may not be funded yet. Use Friendbot on testnet."
+      );
+      error.status = 404;
+      throw error;
+    }
+    throw err;
+  }
+}
+
 // ─── Payments ─────────────────────────────────────────────────────────────────
 
 /**
@@ -144,6 +181,51 @@ async function getPayments(publicKey, { limit = 20, cursor } = {}) {
   return payments;
 }
 
+/**
+ * Submit a signed transaction envelope to Horizon.
+ *
+ * @param {string} signedXDR - Base64 signed transaction XDR.
+ * @returns {Promise<{ hash: string, ledger: number, successful: boolean }>}
+ */
+async function submitTransaction(signedXDR) {
+  if (!signedXDR || typeof signedXDR !== "string") {
+    const error = new Error("signedXDR is required");
+    error.status = 400;
+    throw error;
+  }
+
+  // Resolved lazily so the SDK surface is only touched when submitting.
+  const { TransactionBuilder, Networks } = require("@stellar/stellar-sdk");
+  const networkPassphrase =
+    process.env.STELLAR_NETWORK === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
+
+  let transaction;
+  try {
+    transaction = TransactionBuilder.fromXDR(signedXDR, networkPassphrase);
+  } catch {
+    const error = new Error("Invalid transaction XDR");
+    error.status = 400;
+    throw error;
+  }
+
+  try {
+    const result = await server.submitTransaction(transaction);
+    return {
+      hash: result.hash,
+      ledger: result.ledger,
+      successful: result.successful !== false,
+    };
+  } catch (err) {
+    const resultCodes = err?.response?.data?.extras?.result_codes;
+    if (resultCodes) {
+      const error = new Error(`Transaction failed: ${JSON.stringify(resultCodes)}`);
+      error.status = 400;
+      throw error;
+    }
+    throw err;
+  }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function validatePublicKey(publicKey) {
@@ -156,8 +238,9 @@ function validatePublicKey(publicKey) {
 
 module.exports = {
   getAccount,
-  getAccountAssets,
   getXLMBalance,
   getPayments,
+  hasUSDCTrustline,
+  submitTransaction,
   validatePublicKey,
 };
