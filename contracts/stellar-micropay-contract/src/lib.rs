@@ -2030,4 +2030,3 @@ mod tests {
         client.batch_tip(&token_address, &sender, &tips);
     }
 }
-

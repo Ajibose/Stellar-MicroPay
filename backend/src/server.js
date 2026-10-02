@@ -112,9 +112,9 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/health", healthRoutes);
 app.use("/api/turrets", turretsRoutes);
 app.use("/api/tips", tipsRoutes);
+app.use("/api/webhooks", webhookRoutes);
 app.use("/api/network", networkRoutes);
 app.use("/api/price-alerts", priceAlertsRoutes);
-app.use("/api/webhooks", webhookRoutes);
 app.use("/federation", federationRoutes);
 
 // ─── API Documentation ─────────────────────────────────────────────────────────

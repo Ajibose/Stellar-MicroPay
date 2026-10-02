@@ -110,7 +110,7 @@ If a scanner flags something that is not a vulnerability and cannot be fixed by 
 
 ## localStorage Audit (Issue #1117)
 
-**Date:** 2026-09-28  
+**Date:** 2026-09-28
 **Scope:** Every `localStorage` / `sessionStorage` read or write in the frontend.
 
 ### Summary
