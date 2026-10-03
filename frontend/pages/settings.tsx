@@ -22,6 +22,9 @@ export default function SettingsPage() {
   const [customUrl, setCustomUrl] = useState("");
   const [showMainnetWarning, setShowMainnetWarning] = useState(false);
   const [pendingNetwork, setPendingNetwork] = useState<"testnet" | "mainnet" | "custom" | null>(null);
+  const [fiatCurrency, setFiatCurrency] = useState<string>("USD");
+  useEffect(() => { setFiatCurrency(localStorage.getItem("stellar-micropay:fiat") || "USD"); }, []);
+  const changeFiatCurrency = (code: string) => { setFiatCurrency(code); localStorage.setItem("stellar-micropay:fiat", code); };
 
   // Username registration state
   const [username, setUsername] = useState("");
@@ -264,6 +267,13 @@ export default function SettingsPage() {
     } finally {
       setUsernameLoading(false);
     }
+  };
+
+  const handleClearAllData = () => {
+    if (!window.confirm("Are you sure? This will delete your contacts and settings.")) return;
+    Object.keys(localStorage).filter((k) => k.startsWith("stellar-micropay:")).forEach((k) => localStorage.removeItem(k));
+    disconnectCurrentWallet();
+    window.location.href = "/";
   };
 
   const confirmMainnetSwitch = () => {
@@ -607,6 +617,14 @@ export default function SettingsPage() {
                 </div>
               </div>
             )}
+            {/* Danger Zone */}
+            <div className="border border-red-500/30 rounded-xl p-6">
+              <h2 className="text-lg font-semibold text-red-500 mb-2">Danger Zone</h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">Removes contacts, settings and cached data stored by Stellar MicroPay.</p>
+              <button onClick={handleClearAllData} className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors">
+                Clear all Stellar MicroPay data
+              </button>
+            </div>
           </div>
         </main>
       </div>
