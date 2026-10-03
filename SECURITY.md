@@ -1,21 +1,29 @@
 # Security Policy
 
-## Supported Versions
+## Supported versions
+
+Security fixes land on `develop` and are released from `main`. Older release lines are not patched — please upgrade to the latest release before reporting an issue that only affects an old version.
 
 | Version | Supported |
-|---|---|
-| `main` (latest) | ✅ |
-| older tags | ❌ — please upgrade |
+| --- | --- |
+| `develop` / latest `main` | ✅ |
+| Previous release | ❌ |
+| Anything older | ❌ |
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
 Machine-readable contact details are published at
 [`/.well-known/security.txt`](./frontend/public/.well-known/security.txt).
 
-Report vulnerabilities by email to **emmanuelogheneovo17@gmail.com**, or via the
-contact on the [GitHub profile](https://github.com/Emmy123222). Include:
+1. Use GitHub's private vulnerability reporting on this repository (**Security** → **Advisories** → **Report a vulnerability**) so the report is only visible to the maintainers.
+2. If private reporting is unavailable, contact the maintainers through their GitHub profiles first and agree on a disclosure date before anything is made public. You can also report by email to **emmanuelogheneovo17@gmail.com**.
+3. Include the affected component (`frontend/`, `backend/`, or `contracts/stellar-micropay-contract/`), reproduction steps, and the impact you observed.
+
+Please give the maintainers a reasonable window to ship a fix before disclosing. We will acknowledge a report and confirm the fix once it is released.
+
+When reporting, please include:
 
 1. A concise description of the vulnerability and its potential impact.
 2. Steps to reproduce or a proof-of-concept (PoC) — a minimal code snippet is ideal.
@@ -61,59 +69,24 @@ Reports in **English** are preferred, though we will do our best with other lang
 We gratefully acknowledge security reporters in our
 [CHANGELOG](./CHANGELOG.md) under the release that includes their fix.
 
----
+## Automated vulnerability scanning
 
-# Security Audit
+Dependency scanning runs automatically on every push and pull request, and no step is allowed to be skipped:
 
-## localStorage Audit (Issue #1117)
+| Check | Command | Runs in | Fails on |
+| --- | --- | --- | --- |
+| Frontend audit | `npm audit --audit-level=high` | `.github/workflows/ci.yml` → `frontend` job | HIGH or CRITICAL |
+| Backend audit | `npm audit --audit-level=high` | `.github/workflows/ci.yml` → `backend` job | HIGH or CRITICAL |
+| Contract audit | `cargo audit` (via [`rustsec/audit-check`](https://github.com/rustsec/audit-check)) | `.github/workflows/ci.yml` → `contracts` job | any vulnerability advisory |
 
-**Date:** 2026-09-28  
-**Scope:** Every `localStorage` / `sessionStorage` read or write in the frontend.
+`cargo audit` has no severity threshold, so it is not scoped the way the npm checks are: it fails the build on any *vulnerability* advisory, whatever the severity. Advisories that only flag an unmaintained or informational crate — for example `RUSTSEC-2024-0436` for `paste`, pulled in transitively by the Soroban SDK's build dependencies — are printed as warnings and do not fail the build. The same three checks also run on a weekly schedule in [`.github/workflows/security-audit.yml`](.github/workflows/security-audit.yml) to catch advisories published after a dependency was last touched.
 
-### Summary
+Static analysis runs alongside these: [CodeQL](.github/workflows/codeql.yml) for JavaScript/TypeScript and Rust, and [Gitleaks](.github/workflows/gitleaks.yml) for committed secrets.
 
-| Finding | Severity | Status |
-|---------|----------|--------|
-| JWT stored in `localStorage` (`micropay_auth_token`) | High | **Fixed** — moved to `sessionStorage`; legacy localStorage key cleared on access |
-| Private key / secret seed in browser storage | Critical | **Not found** — signing delegated to Freighter; no `S…` keys persisted |
-| Non-sensitive preference / cache keys in localStorage | Info | Accepted — see inventory below |
+Reproduce the audit locally before pushing:
 
-### JWT handling
-
-- **Backend** (`backend/src/routes/auth.js`): SEP-0010 verify sets an **httpOnly** `jwt` cookie (`sameSite: strict`, `secure` in production) and returns `{ token }` in the JSON body.
-- **Frontend** (`frontend/lib/auth.ts`): JWT is stored in **sessionStorage** under `micropay_auth_token` (cleared when the tab closes). Any legacy copy in `localStorage` is removed on get/set/clear.
-- **Wallet** (`frontend/lib/wallet.ts`): `setJwtToken` / `getJwtToken` / `disconnectWallet` go through `auth.ts` (sessionStorage only).
-
-JWTs must **never** be written to `localStorage` (XSS can exfiltrate them for the lifetime of the token). Prefer the httpOnly cookie for cookie-authenticated requests (`credentials: "include"`).
-
-### Private keys
-
-- User signing uses `@stellar/freighter-api` only. No Stellar secret keys are stored in `localStorage`, `sessionStorage`, or application state.
-- Backend SEP-0010 server key comes from `SERVER_PRIVATE_KEY` (env) or an ephemeral in-memory keypair — never from browser storage.
-
-### localStorage inventory
-
-| Key | File(s) | Contents | Sensitive? |
-|-----|---------|----------|------------|
-| `stellar-micropay:offline-balance:${publicKey}` | `pages/dashboard.tsx` | Cached XLM/USDC balances + reserve info | No (public balance data) |
-| `notificationOptIn` | `pages/dashboard.tsx` | `"true"` / `"false"` push opt-in | No |
-| `stellar-micropay:onboarding-completed` | `pages/dashboard.tsx` | `"true"` if tour finished/skipped | No |
-| `stellar-micropay-contacts` | `pages/contacts.tsx` | Contact name + public address | Low (public keys only) |
-| `stellar-micropay:offline-payments:${publicKey}:${limit}` | `components/TransactionList.tsx` | Cached payment history | No (on-chain public data) |
-| `stellar-micropay:network` | `lib/stellar.ts` | Network name + Horizon URL | No |
-| `stellar-micropay:theme` | `pages/_app.tsx` | `"dark"` / `"light"` | No |
-| `micropay.paymentLinks.v1` | `lib/paymentLinks.ts` | Payment-link metadata (dest, amount, memo, status) | Low (no secrets) |
-| `stellar-micropay:favourites` | `components/SendPaymentForm.tsx` | Favourite name + address | Low (public keys only) |
-| ~~`micropay_auth_token`~~ | ~~`lib/auth.ts`~~ | ~~JWT~~ | **Removed from localStorage** |
-
-### sessionStorage inventory
-
-| Key | File(s) | Contents | Sensitive? |
-|-----|---------|----------|------------|
-| `micropay_auth_token` | `lib/auth.ts` | SEP-0010 JWT | Yes — session-scoped only (acceptable vs localStorage) |
-| `stellar-micropay:recent-recipients` | `components/SendPaymentForm.tsx` | Up to 3 destination addresses | Low |
-| `stellar-micropay:transaction-filters` | `pages/transactions.tsx` | Filter UI state | No |
-
-### Content-Security-Policy
-
-See issue #1116. A strict CSP is defined in `frontend/next.config.mjs` (`headers()`) and mirrored in `nginx/nginx.conf` for static-export production serving (`script-src 'self'` with no `'unsafe-inline'` for scripts).
+```bash
+cd frontend && npm ci && npm audit --audit-level=high
+cd backend  && npm ci && npm audit --audit-level=high
+cargo install cargo-audit        # first run only
+cargo audit                      # from the repo root; reads the workspace Cargo.lock
