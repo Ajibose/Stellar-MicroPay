@@ -35,6 +35,26 @@ async function getBalance(req, res, next) {
 }
 
 /**
+ * GET /api/accounts/:publicKey/streaks
+ *
+ * @param {object} req - Express request
+ * @param {object} req.params
+ * @param {string} req.params.publicKey - Stellar public key (G...)
+ * @param {object} res - Express response
+ * @param {function} next - Express error-handling callback
+ * @returns {Promise<void>} JSON: `{ currentStreak: number, longestStreak: number, lastTransactionDate: string }`
+ */
+async function getStreaks(req, res, next) {
+  try {
+    const { publicKey } = req.params;
+    const streaks = await stellarService.getAccountStreaks(publicKey);
+    res.json(streaks);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * POST /api/accounts/register
  * Register a new username with a public key.
  */
@@ -74,4 +94,18 @@ async function resolveUsername(req, res, next) {
   }
 }
 
-module.exports = { getAccount, getBalance, registerUsername, resolveUsername };
+/**
+ * GET /api/accounts/:publicKey/has-usdc-trustline
+ * Returns { hasTrustline: boolean }.
+ */
+async function hasUSDCTrustline(req, res, next) {
+  try {
+    const { publicKey } = req.params;
+    const hasTrustline = await stellarService.hasUSDCTrustline(publicKey);
+    res.json({ hasTrustline });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { getAccount, getBalance, registerUsername, resolveUsername, hasUSDCTrustline };
