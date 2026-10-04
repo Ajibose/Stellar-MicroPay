@@ -57,6 +57,30 @@ export function formatXLMPrecise(amount: string | number): string {
 /**
  * Format a Stellar asset amount with asset-specific precision rules.
  */
+const DEFAULT_ASSET_CODE = "XLM";
+
+const ASSET_FORMAT_RULES: Record<
+  string,
+  { minimumFractionDigits: number; maximumFractionDigits: number }
+> = {
+  XLM: { minimumFractionDigits: 0, maximumFractionDigits: 7 },
+  USDC: { minimumFractionDigits: 2, maximumFractionDigits: 6 },
+  AQUA: { minimumFractionDigits: 0, maximumFractionDigits: 7 },
+  DEFAULT: { minimumFractionDigits: 0, maximumFractionDigits: 7 },
+};
+
+function normalizeAssetCode(assetCode?: string): string {
+  return assetCode?.trim().toUpperCase() || DEFAULT_ASSET_CODE;
+}
+
+function getAssetFormatRule(assetCode?: string): {
+  minimumFractionDigits: number;
+  maximumFractionDigits: number;
+} {
+  const normalized = normalizeAssetCode(assetCode);
+  return ASSET_FORMAT_RULES[normalized] ?? ASSET_FORMAT_RULES.DEFAULT;
+}
+
 export function formatAsset(
   amount: string | number,
   assetCode = DEFAULT_ASSET_CODE
@@ -285,17 +309,6 @@ export function parseBatchRecipientsCSV(csv: string): BatchRecipientCSVRow[] {
   });
 }
 
-/**
- * Format a USD value with 2 decimal places (e.g. "≈ $142.50 USD").
- */
-export function formatUSD(usdValue: number): string {
-  if (usdValue == null) return `≈ $0.00 USD`;
-  if (isNaN(usdValue)) return `≈ $NaN USD`;
-  return `≈ $${usdValue.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })} USD`;
-}
 
 /**
  * Format a USD value with 2 decimal places (e.g. "≈ $142.50 USD").

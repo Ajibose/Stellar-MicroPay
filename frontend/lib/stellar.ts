@@ -21,7 +21,7 @@ import {
   nativeToScVal,
   scValToNative,
   xdr,
-  SorobanRpc,
+  rpc,
   Federation,
 } from "@stellar/stellar-sdk";
 
@@ -334,19 +334,19 @@ export function getSorobanRpcUrl(): string {
 export const SOROBAN_RPC_URL = getSorobanRpcUrl();
 
 /** Pre-configured Soroban RPC server instance. */
-let _sorobanServer: SorobanRpc.Server | null = null;
-export function getSorobanServer(): SorobanRpc.Server {
+let _sorobanServer: rpc.Server | null = null;
+export function getSorobanServer(): rpc.Server {
   const currentUrl = getSorobanRpcUrl();
   if (!_sorobanServer || _sorobanServer.serverURL.toString() !== currentUrl) {
-    _sorobanServer = new SorobanRpc.Server(currentUrl);
+    _sorobanServer = new rpc.Server(currentUrl);
   }
   return _sorobanServer;
 }
 
 // For backwards compatibility
-export const sorobanServer = new Proxy({} as SorobanRpc.Server, {
+export const sorobanServer = new Proxy({} as rpc.Server, {
   get(target, prop) {
-    return getSorobanServer()[prop as keyof SorobanRpc.Server];
+    return getSorobanServer()[prop as keyof rpc.Server];
   },
 });
 
@@ -744,18 +744,6 @@ export async function buildChangeTrustTransaction({
 }
 
 /**
- * Build an unsigned XLM payment transaction ready for Freighter to sign.
- */
-/** Supported Stellar memo types for payment construction. */
-export type StellarMemoType = "text" | "id" | "hash" | "return";
-
-/** Maximum uint64 value accepted by MEMO_ID. */
-export const STELLAR_MEMO_ID_MAX = "18446744073709551615";
-
-/** MEMO_HASH / MEMO_RETURN must be exactly 32 bytes (64 hex characters). */
-export const STELLAR_MEMO_HASH_HEX_LENGTH = 64;
-
-/**
  * Validate and build a Stellar Memo for the given type and value.
  * @throws {Error} When the memo value is invalid for the selected type.
  */
@@ -972,7 +960,7 @@ export async function buildAssetIssueTransaction({
 
   return new TransactionBuilder(sourceAccount, {
     fee: STELLAR_BASE_FEE_STROOPS_STRING,
-    networkPassphrase: NETWORK_PASSPHRASE,
+    networkPassphrase: getNetworkPassphrase(),
   })
     .addOperation(
       Operation.payment({
@@ -1002,7 +990,7 @@ export async function buildHomeDomainTransaction({
 
   return new TransactionBuilder(sourceAccount, {
     fee: STELLAR_BASE_FEE_STROOPS_STRING,
-    networkPassphrase: NETWORK_PASSPHRASE,
+    networkPassphrase: getNetworkPassphrase(),
   })
     .addOperation(Operation.setOptions({ homeDomain }))
     .setTimeout(STELLAR_TRANSACTION_TIMEOUT_SECONDS)
@@ -1011,7 +999,7 @@ export async function buildHomeDomainTransaction({
 
 /** Stellar Expert URL for an issued asset, e.g. `.../asset/COOL-GABC...`. */
 export function assetExplorerUrl(assetCode: string, issuer: string): string {
-  const net = NETWORK === "mainnet" ? "public" : "testnet";
+  const net = getNetwork() === "mainnet" ? "public" : "testnet";
   return `https://stellar.expert/explorer/${net}/asset/${assetCode}-${issuer}`;
 }
 
@@ -1041,7 +1029,7 @@ export function buildStellarToml({
   issuerPublicKey: string;
   network?: "testnet" | "mainnet";
 }): string {
-  const activeNetwork = network ?? NETWORK;
+  const activeNetwork = network ?? getNetwork();
   const accounts = [issuerPublicKey];
 
   if (activeNetwork === "mainnet") {
@@ -1130,8 +1118,8 @@ export async function collectSignatures(unsignedXDR: string, signedXDRs: string[
       for (const sig of signedTx.signatures) {
         // Check if signature already exists to avoid duplicates
         const exists = transaction.signatures.some(existing =>
-          existing.hint().equals(sig.hint()) &&
-          existing.signature().equals(sig.signature())
+          existing.hint.equals(sig.hint) &&
+          existing.signature.equals(sig.signature)
         );
         if (!exists) {
           transaction.signatures.push(sig);
@@ -1452,7 +1440,7 @@ export async function buildSorobanTipTransaction({
   // Preflight: Simulate the transaction to get resources and fees
   const simulated = await sorobanServer.simulateTransaction(tx);
 
-  if (SorobanRpc.Api.isSimulationError(simulated)) {
+  if (rpc.Api.isSimulationError(simulated)) {
     throw new Error(`Simulation failed: ${simulated.error}`);
   }
 
@@ -1487,7 +1475,7 @@ export async function getContractTipTotal(recipient: string): Promise<string> {
 
     const sim = await sorobanServer.simulateTransaction(tx);
 
-    if (SorobanRpc.Api.isSimulationSuccess(sim) && sim.result) {
+    if (rpc.Api.isSimulationSuccess(sim) && sim.result) {
       const value = scValToNative(sim.result.retval);
       return value.toString();
     }
@@ -1545,7 +1533,7 @@ export async function buildReceiptMintTransaction({
 
   const simulated = await sorobanServer.simulateTransaction(tx);
 
-  if (SorobanRpc.Api.isSimulationError(simulated)) {
+  if (rpc.Api.isSimulationError(simulated)) {
     throw new Error(`Receipt simulation failed: ${simulated.error}`);
   }
 
@@ -1570,7 +1558,7 @@ export async function getReceiptCount(payer: string): Promise<number> {
       .build();
 
     const sim = await sorobanServer.simulateTransaction(tx);
-    if (SorobanRpc.Api.isSimulationSuccess(sim) && sim.result) {
+    if (rpc.Api.isSimulationSuccess(sim) && sim.result) {
       const value = scValToNative(sim.result.retval);
       return Number(value);
     }
