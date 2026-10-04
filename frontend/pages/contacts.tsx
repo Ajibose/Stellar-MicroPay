@@ -21,9 +21,12 @@ interface Contact {
   name: string;
   address: string;
   createdAt: number;
+  favourite?: boolean;
 }
 
 const STORAGE_KEY = "stellar-micropay-contacts";
+const FAV_TAB_KEY = "stellar-micropay-contacts-favourites-only";
+type ContactFilter = "all" | "favourites";
 
 export default function Contacts() {
   const { publicKey } = useWallet();
@@ -33,11 +36,17 @@ export default function Contacts() {
   // Contact management state
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [storageAvailable, setStorageAvailable] = useState(true);
 
   // Form state
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [contactFilter, setContactFilter] = useState<ContactFilter>("all");
+  useEffect(() => { setContactFilter(localStorage.getItem(FAV_TAB_KEY) === "1" ? "favourites" : "all"); }, []);
+  const setFilter = (filter: ContactFilter) => { setContactFilter(filter); localStorage.setItem(FAV_TAB_KEY, filter === "favourites" ? "1" : "0"); };
+  const toggleFavourite = (id: string) => setContacts((prev) => prev.map((c) => (c.id === id ? { ...c, favourite: !c.favourite } : c)));
+  const visibleContacts = contactFilter === "favourites" ? contacts.filter((c) => c.favourite) : contacts;
 
   // Federation lookup state
   const [federationInput, setFederationInput] = useState("");
@@ -49,21 +58,30 @@ export default function Contacts() {
 
   // Load contacts from localStorage on mount
   useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      try {
-        setContacts(JSON.parse(stored));
-      } catch (err) {
-        console.error("Failed to load contacts:", err);
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        try {
+          setContacts(JSON.parse(stored));
+        } catch (err) {
+          console.error("Failed to load contacts:", err);
+        }
       }
+    } catch {
+      setStorageAvailable(false);
+    } finally {
+      setLoaded(true);
     }
-    setLoaded(true);
   }, []);
 
   // Save contacts to localStorage whenever they change
   useEffect(() => {
     if (loaded) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(contacts));
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(contacts));
+      } catch {
+        setStorageAvailable(false);
+      }
     }
   }, [contacts, loaded]);
 
@@ -174,6 +192,37 @@ export default function Contacts() {
     showToast("Address copied");
   };
 
+  // Export contacts as JSON backup
+  const handleExportContacts = () => {
+    const blob = new Blob([JSON.stringify(contacts, null, 2)], { type: "application/json" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "stellar-micropay-contacts.json";
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
+  // Import contacts from JSON backup, skipping duplicate addresses
+  const handleImportContacts = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed: Contact[] = JSON.parse(String(reader.result));
+        if (!Array.isArray(parsed)) throw new Error("invalid shape");
+        const existing = new Set(contacts.map((c) => c.address));
+        const fresh = parsed.filter((c) => c?.address && !existing.has(c.address));
+        setContacts((prev) => [...prev, ...fresh]);
+        showToast(`Imported ${fresh.length} contact(s)${parsed.length - fresh.length ? `, ${parsed.length - fresh.length} duplicate(s) skipped` : ""}`);
+      } catch {
+        showToast("Import failed: malformed JSON file");
+      }
+    };
+    reader.readAsText(file);
+    event.target.value = "";
+  };
+
   if (!publicKey) {
     return (
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-16 cursor-default select-none">
@@ -197,6 +246,15 @@ export default function Contacts() {
         </h1>
         <p className="text-slate-400">{`Save and manage Stellar addresses`}</p>
       </div>
+
+      {!storageAvailable && (
+        <div
+          role="status"
+          className="mb-6 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-200"
+        >
+          Contacts won&apos;t be saved in private/incognito mode
+        </div>
+      )}
 
       {/* Toast */}
       {toastVisible && (
@@ -324,22 +382,52 @@ export default function Contacts() {
 
         {/* Contacts List */}
         <div>
+          <div className="mb-4 flex items-center gap-2">
+            {(["all", "favourites"] as ContactFilter[]).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setFilter(tab)}
+                className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${contactFilter === tab ? "bg-stellar-500/15 text-stellar-300 border border-stellar-500/30" : "text-slate-400 hover:text-white border border-transparent"}`}
+              >
+                {tab === "all" ? "All" : "Favourites"}
+              </button>
+            ))}
+          </div>
           <h2 className="font-display text-lg font-semibold text-white mb-4 flex items-center gap-2">
             <ContactsIcon className="w-5 h-5 text-stellar-400" />
             {`Saved Contacts`}
             <span className="ml-auto text-sm font-normal text-slate-400">
               {contacts.length} {contacts.length === 1 ? "contact" : "contacts"}
             </span>
+            <button
+              onClick={handleExportContacts}
+              title="Export contacts as JSON"
+              className="text-xs px-2.5 py-1 rounded-lg text-stellar-300 bg-stellar-500/10 border border-stellar-500/20 hover:bg-stellar-500/20 transition-colors"
+            >
+              Export contacts
+            </button>
+            <label
+              title="Import contacts from JSON"
+              className="text-xs px-2.5 py-1 rounded-lg text-stellar-300 bg-stellar-500/10 border border-stellar-500/20 hover:bg-stellar-500/20 transition-colors cursor-pointer"
+            >
+              Import contacts
+              <input type="file" accept="application/json,.json" onChange={handleImportContacts} className="hidden" />
+            </label>
           </h2>
 
           {contacts.length === 0 ? (
             <div className="card text-center py-12">
-              <ContactsIcon className="w-12 h-12 mx-auto mb-3 text-slate-600" />
-              <p className="text-slate-400">{`No contacts yet. Add one to get started.`}</p>
+              <svg className="w-32 h-32 mx-auto mb-4" viewBox="0 0 128 128" fill="none" aria-hidden="true">
+                <rect x="24" y="20" width="80" height="88" rx="8" stroke="#334155" strokeWidth="3" />
+                <path d="M24 44h80" stroke="#334155" strokeWidth="3" />
+                <rect x="40" y="62" width="48" height="32" rx="4" stroke="#475569" strokeWidth="3" />
+                <circle cx="64" cy="78" r="7" stroke="#475569" strokeWidth="3" />
+              </svg>
+              <p className="text-slate-400">{`No contacts yet — add one below ↓`}</p>
             </div>
           ) : (
             <div className="space-y-3">
-              {contacts.map((contact) => (
+              {visibleContacts.map((contact) => (
                 <div
                   key={contact.id}
                   className="card-hover p-4 rounded-xl border border-slate-700/50 bg-slate-800/30 transition-all"
@@ -353,6 +441,16 @@ export default function Contacts() {
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
+                      {/* Favourite star toggle */}
+                      <button
+                        onClick={() => toggleFavourite(contact.id)}
+                        title={contact.favourite ? "Remove from Favourites" : "Add to Favourites"}
+                        aria-pressed={!!contact.favourite}
+                        className={`p-2 rounded-lg transition-colors ${contact.favourite ? "text-amber-300 hover:bg-amber-400/10" : "text-slate-500 hover:text-amber-300 hover:bg-slate-700/50"}`}
+                      >
+                        {contact.favourite ? "★" : "☆"}
+                      </button>
+
                       {/* Copy button */}
                       <button
                         onClick={() => handleCopyAddress(contact.address)}

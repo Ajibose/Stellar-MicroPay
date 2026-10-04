@@ -11,9 +11,10 @@ import TransactionList, {
   TransactionDirectionFilter,
   TransactionFilters,
 } from "@/components/TransactionList";
-import { fetchAllPayments, NETWORK, shortenAddress, PaymentRecord } from "@/lib/stellar";
+import { fetchAllPayments, getNetwork, shortenAddress, PaymentRecord } from "@/lib/stellar";
 import { exportToCSV, exportToJSON, formatAsset, formatDate } from "@/utils/format";
 import { useWallet } from "@/lib/useWallet";
+import { loadAllPaymentNotes } from "@/lib/usePaymentNotes";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 const TRANSACTION_FILTERS_STORAGE_KEY = "stellar-micropay:transaction-filters";
@@ -64,7 +65,7 @@ export default function Transactions() {
     (memoSearch.trim() !== "" ? 1 : 0);
   const hasActiveFilters = activeFilterCount > 0;
   const exportPayments = filteredPayments;
-  const networkLabel = NETWORK === "mainnet" ? "Mainnet" : "Testnet";
+  const networkLabel = getNetwork() === "mainnet" ? "Mainnet" : "Testnet";
 
   // Receives the latest payments array from the list whenever it changes
   const handlePaymentsChange = useCallback((records: PaymentRecord[]) => {
@@ -128,7 +129,9 @@ export default function Transactions() {
       if (allPayments.length === 0) return;
 
       if (format === "csv") {
-        exportToCSV(allPayments);
+        // Include private notes in CSV export (Issue #1189)
+        const notes = loadAllPaymentNotes();
+        exportToCSV(allPayments, notes);
       } else {
         exportToJSON(allPayments);
       }
