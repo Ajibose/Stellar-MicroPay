@@ -3,7 +3,7 @@
  * Displays paginated payment history for a Stellar account.
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/router";
 import {
   getPaymentHistory,
@@ -13,6 +13,7 @@ import {
   PaymentHistoryResponse,
 } from "@/lib/stellar";
 import { formatAsset, timeAgo, copyToClipboard } from "@/utils/format";
+import { loadAllPaymentNotes, savePaymentNote } from "@/lib/usePaymentNotes";
 import clsx from "clsx";
 
 export type TransactionDirectionFilter = "all" | "sent" | "received";
@@ -132,7 +133,14 @@ export default function TransactionList({
   const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const [stalePaymentsAt, setStalePaymentsAt] = useState<number | null>(null);
+  const [isMobile, setIsMobile] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
   const router = useRouter();
+
+  // Private off-chain payment notes — Issue #1189
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [editingNoteHash, setEditingNoteHash] = useState<string | null>(null);
+  const [noteInputValue, setNoteInputValue] = useState("");
 
   const updatePayments = useCallback(
     (next: PaymentRecord[]) => {
@@ -141,6 +149,36 @@ export default function TransactionList({
     },
     [onPaymentsChange]
   );
+
+  // Load all saved notes on mount
+  useEffect(() => {
+    setNotes(loadAllPaymentNotes());
+  }, []);
+
+  const handleStartEditNote = (hash: string) => {
+    setEditingNoteHash(hash);
+    setNoteInputValue(notes[hash] ?? "");
+  };
+
+  const handleSaveNote = (hash: string) => {
+    savePaymentNote(hash, noteInputValue);
+    setNotes((prev) => {
+      const next = { ...prev };
+      if (noteInputValue.trim() === "") {
+        delete next[hash];
+      } else {
+        next[hash] = noteInputValue.trim();
+      }
+      return next;
+    });
+    setEditingNoteHash(null);
+    setNoteInputValue("");
+  };
+
+  const handleCancelEditNote = () => {
+    setEditingNoteHash(null);
+    setNoteInputValue("");
+  };
 
   const fetchPayments = useCallback(
     async (isLoadMore = false) => {
@@ -210,7 +248,42 @@ export default function TransactionList({
     fetchPayments();
   }, [fetchPayments]);
 
-  const handleLoadMore = () => fetchPayments(true);
+  const handleLoadMore = useCallback(() => fetchPayments(true), [fetchPayments]);
+
+  // Track the mobile breakpoint (<= 768px) so infinite scroll can replace
+  // the pagination button on small screens while desktop keeps the button.
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const mql = window.matchMedia("(max-width: 768px)");
+    const update = () => setIsMobile(mql.matches);
+    update();
+    mql.addEventListener?.("change", update);
+    return () => mql.removeEventListener?.("change", update);
+  }, []);
+
+  // Infinite scroll: observe a sentinel at the bottom of the list and load the
+  // next page as soon as it scrolls into view. Mobile only — desktop uses the
+  // pagination button fallback below.
+  useEffect(() => {
+    if (!isMobile || !hasMore || loading || loadingMore) return;
+
+    const node = sentinelRef.current;
+    if (!node || typeof IntersectionObserver === "undefined") return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          handleLoadMore();
+        }
+      },
+      { rootMargin: "0px 0px 120px 0px" }
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [isMobile, hasMore, loading, loadingMore, handleLoadMore]);
 
   const handleCopy = async (text: string, id: string) => {
     await copyToClipboard(text);
@@ -234,6 +307,13 @@ export default function TransactionList({
   const visiblePayments = filterPayments(payments, filters);
   const hasActiveFilters =
     filters.direction !== "all" || filters.minAmount.trim() !== "" || filters.memoSearch.trim() !== "";
+
+  // Issue #1046 — export exactly what is on screen: the currently filtered,
+  // loaded rows (not all pages). Filename embeds a short key + today's date.
+  const handleExportCsv = () => {
+    if (visiblePayments.length === 0) return;
+    exportFilteredTransactionsToCSV(visiblePayments, publicKey);
+  };
 
   if (loading) {
     return (
@@ -306,13 +386,34 @@ export default function TransactionList({
                 <HistoryIcon className="w-5 h-5 text-stellar-400" />
                 Recent Payments
               </h2>
-              <button
-                onClick={() => fetchPayments()}
-                className="text-xs text-slate-500 hover:text-stellar-400 transition-colors flex items-center gap-1"
-              >
-                <RefreshIcon className="w-3.5 h-3.5" />
-                Refresh
-              </button>
+              <div className="flex items-center gap-4">
+                {/* Export CSV — exports the currently filtered and loaded rows
+                    only (Issue #1046). Disabled while history is loading or
+                    when there is nothing to export. */}
+                <button
+                  type="button"
+                  onClick={handleExportCsv}
+                  disabled={loading || loadingMore || visiblePayments.length === 0}
+                  title="Export the currently filtered transactions as CSV"
+                  data-testid="export-csv-button"
+                  className={clsx(
+                    "text-xs transition-colors flex items-center gap-1",
+                    loading || loadingMore || visiblePayments.length === 0
+                      ? "text-slate-600 cursor-not-allowed"
+                      : "text-slate-500 hover:text-stellar-400"
+                  )}
+                >
+                  <DownloadIcon className="w-3.5 h-3.5" />
+                  Export CSV
+                </button>
+                <button
+                  onClick={() => fetchPayments()}
+                  className="text-xs text-slate-500 hover:text-stellar-400 transition-colors flex items-center gap-1"
+                >
+                  <RefreshIcon className="w-3.5 h-3.5" />
+                  Refresh
+                </button>
+              </div>
             </div>
           )}
 
@@ -402,6 +503,44 @@ export default function TransactionList({
                   </span>
                 )}
               </div>
+
+              {/* Private note display (Issue #1189) */}
+              {notes[tx.transactionHash] && editingNoteHash !== tx.transactionHash && (
+                <p className="text-xs italic text-slate-500 mt-0.5 truncate max-w-xs">
+                  📝 {notes[tx.transactionHash]}
+                </p>
+              )}
+
+              {/* Inline note editor */}
+              {editingNoteHash === tx.transactionHash && (
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={noteInputValue}
+                    onChange={(e) => setNoteInputValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleSaveNote(tx.transactionHash);
+                      if (e.key === "Escape") handleCancelEditNote();
+                    }}
+                    placeholder="Private note (local only)…"
+                    maxLength={200}
+                    autoFocus
+                    className="flex-1 text-xs bg-white/5 border border-white/10 rounded-md px-2 py-1 text-slate-300 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-stellar-500/40"
+                  />
+                  <button
+                    onClick={() => handleSaveNote(tx.transactionHash)}
+                    className="text-xs text-emerald-400 hover:text-emerald-300 px-2 py-1 rounded"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={handleCancelEditNote}
+                    className="text-xs text-slate-500 hover:text-slate-300 px-1 py-1 rounded"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Amount + link */}
@@ -415,6 +554,18 @@ export default function TransactionList({
                 {tx.type === "sent" ? "-" : "+"}
                 {formatAsset(tx.amount, tx.asset)}
               </span>
+
+              {/* Add / edit private note button - Issue #1189 */}
+              {editingNoteHash !== tx.transactionHash && (
+                <button
+                  onClick={() => handleStartEditNote(tx.transactionHash)}
+                  className="opacity-0 group-hover:opacity-100 transition-opacity text-xs text-slate-400 hover:text-stellar-400 px-1 py-0.5 rounded"
+                  title={notes[tx.transactionHash] ? "Edit note" : "Add note (stored locally)"}
+                  aria-label={notes[tx.transactionHash] ? "Edit note" : "Add note"}
+                >
+                  {notes[tx.transactionHash] ? "✏️" : "📝"}
+                </button>
+              )}
 
               {/* Send Again — only for sent transactions */}
               {tx.type === "sent" && (
@@ -444,9 +595,23 @@ export default function TransactionList({
           </div>
         ))}
 
-        {/* Load more */}
-        {hasMore && payments.length > 0 && (
-          <div className="flex justify-center mt-4">
+        {/* Infinite-scroll sentinel (mobile) */}
+        {isMobile && hasMore && payments.length > 0 && (
+          <div
+            ref={sentinelRef}
+            className="flex justify-center py-4"
+            aria-live="polite"
+            aria-label="Loading more transactions"
+          >
+            {loadingMore && (
+              <div className="w-5 h-5 border-2 border-stellar-400 border-t-transparent rounded-full animate-spin" />
+            )}
+          </div>
+        )}
+
+        {/* Pagination fallback (desktop > 768px) */}
+        {!isMobile && hasMore && payments.length > 0 && (
+          <div className="hidden md:flex justify-center mt-4">
             <button
               onClick={handleLoadMore}
               disabled={loadingMore}
@@ -462,6 +627,13 @@ export default function TransactionList({
               )}
             </button>
           </div>
+        )}
+
+        {/* Privacy disclaimer for local notes — Issue #1189 */}
+        {Object.keys(notes).length > 0 && (
+          <p className="text-xs text-slate-600 text-center mt-4">
+            📝 Notes are stored locally and only visible to you.
+          </p>
         )}
       </div>
     </div>
@@ -490,6 +662,14 @@ function ArrowDownIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 13.5L12 21m0 0l-7.5-7.5M12 21V3" />
+    </svg>
+  );
+}
+
+function DownloadIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
     </svg>
   );
 }
