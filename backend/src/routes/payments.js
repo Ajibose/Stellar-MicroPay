@@ -11,6 +11,7 @@ const { strictLimiter } = require("../middleware/rateLimit");
 const { validatePublicKey } = require("../middleware/sanitization");
 const { idempotency } = require("../middleware/idempotency");
 const paymentController = require("../controllers/paymentController");
+const { horizonCircuitBreakerMiddleware } = require("../middleware/horizonCircuitBreaker");
 
 /**
  * POST /api/payments/submit
@@ -50,12 +51,12 @@ router.post("/submit", strictLimiter, idempotency, paymentController.submitPayme
  *   limit  — number of results (default: 20, max: 100)
  *   cursor — pagination cursor
  */
-router.get("/:publicKey", strictLimiter, validatePublicKey(), paymentController.getPayments);
+router.get("/:publicKey", strictLimiter, validatePublicKey(), horizonCircuitBreakerMiddleware, paymentController.getPayments);
 
 /**
  * GET /api/payments/:publicKey/stats
  * Return aggregate stats for an account (total sent, received, count).
  */
-router.get("/:publicKey/stats", validatePublicKey(), paymentController.getStats);
+router.get("/:publicKey/stats", validatePublicKey(), horizonCircuitBreakerMiddleware, paymentController.getStats);
 
 module.exports = router;

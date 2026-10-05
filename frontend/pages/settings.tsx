@@ -10,7 +10,7 @@ import { getNetworkConfig, setNetworkConfig, NetworkConfig } from "@/lib/stellar
 import { disconnectWallet } from "@/lib/wallet";
 import { shortenAddress } from "@/lib/stellar";
 import { useWallet } from "@/lib/useWallet";
-import { resetOnboardingTour } from "@/hooks/useOnboarding";
+import WalletHealthPanel from "@/components/WalletHealthPanel";
 
 export default function SettingsPage() {
   const { publicKey, disconnectWallet: disconnectCurrentWallet } = useWallet();
@@ -22,6 +22,9 @@ export default function SettingsPage() {
   const [customUrl, setCustomUrl] = useState("");
   const [showMainnetWarning, setShowMainnetWarning] = useState(false);
   const [pendingNetwork, setPendingNetwork] = useState<"testnet" | "mainnet" | "custom" | null>(null);
+  const [fiatCurrency, setFiatCurrency] = useState<string>("USD");
+  useEffect(() => { setFiatCurrency(localStorage.getItem("stellar-micropay:fiat") || "USD"); }, []);
+  const changeFiatCurrency = (code: string) => { setFiatCurrency(code); localStorage.setItem("stellar-micropay:fiat", code); };
 
   // Username registration state
   const [username, setUsername] = useState("");
@@ -264,6 +267,13 @@ export default function SettingsPage() {
     } finally {
       setUsernameLoading(false);
     }
+  };
+
+  const handleClearAllData = () => {
+    if (!window.confirm("Are you sure? This will delete your contacts and settings.")) return;
+    Object.keys(localStorage).filter((k) => k.startsWith("stellar-micropay:")).forEach((k) => localStorage.removeItem(k));
+    disconnectCurrentWallet();
+    window.location.href = "/";
   };
 
   const confirmMainnetSwitch = () => {
@@ -607,6 +617,9 @@ export default function SettingsPage() {
                 </div>
               </div>
             )}
+
+            {/* Wallet Health Check Section - Issue #1192 */}
+            {publicKey && <WalletHealthPanel publicKey={publicKey} />}
           </div>
         </main>
       </div>

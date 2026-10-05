@@ -200,6 +200,91 @@ export function truncateMemoText(memo: string): string {
 }
 
 /**
+ * Memo types the Stellar protocol defines, and the ones the payment form offers.
+ */
+export type StellarMemoType = "text" | "id" | "hash" | "return";
+
+/** MEMO_ID is a uint64, so this is the largest value the protocol field holds. */
+export const STELLAR_MEMO_ID_MAX = "18446744073709551615";
+
+/** MEMO_HASH and MEMO_RETURN carry exactly 32 bytes, i.e. 64 hex characters. */
+export const STELLAR_MEMO_HASH_HEX_LENGTH = 64;
+
+/** Placeholder per memo type, so the form and its tests agree on the wording. */
+export const STELLAR_MEMO_PLACEHOLDERS: Record<StellarMemoType, string> = {
+  text: "Payment note...",
+  id: "e.g. 1234567890",
+  hash: "64 hex characters",
+  return: "64 hex characters",
+};
+
+/**
+ * Why `value` cannot be used as a memo of `type`, or null when it can.
+ *
+ * Separate from {@link buildMemo} so the form can show the reason while typing and
+ * disable submit, while the builder still refuses to attach a memo the protocol
+ * would reject.
+ */
+export function memoValueError(type: StellarMemoType, value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null; // an empty memo is simply not attached
+
+  if (type === "id") {
+    if (!/^\d+$/.test(trimmed)) return "MEMO_ID must be a whole number.";
+    // Compare as BigInt: Number() loses precision above 2^53.
+    if (BigInt(trimmed) > BigInt(STELLAR_MEMO_ID_MAX)) {
+      return "MEMO_ID must fit in an unsigned 64-bit integer.";
+    }
+    return null;
+  }
+
+  if (type === "hash" || type === "return") {
+    const label = type === "hash" ? "MEMO_HASH" : "MEMO_RETURN";
+    if (!/^[0-9a-fA-F]+$/.test(trimmed)) return `${label} must be hexadecimal.`;
+    if (trimmed.length !== STELLAR_MEMO_HASH_HEX_LENGTH) {
+      return `${label} must be exactly ${STELLAR_MEMO_HASH_HEX_LENGTH} hex characters (32 bytes).`;
+    }
+    return null;
+  }
+
+  if (memoTextByteLength(trimmed) > STELLAR_MEMO_TEXT_MAX_BYTES) {
+    return `MEMO_TEXT must be at most ${STELLAR_MEMO_TEXT_MAX_BYTES} bytes.`;
+  }
+  return null;
+}
+
+/**
+ * Build the {@link Memo} the transaction builder needs for the chosen type.
+ *
+ * Only text is truncated, because the 28-byte cap is the one the protocol lets you
+ * handle by approximation. A hash that is not 32 bytes, or an id that does not fit
+ * in uint64, is rejected instead of adjusted: a truncated hash is a different
+ * value than the one the sender meant to commit to.
+ */
+export function buildMemo(type: StellarMemoType, value: string): Memo {
+  const trimmed = value.trim();
+
+  // Text is the one type the protocol lets you trim to fit, so it is shortened
+  // rather than refused. The other three have fixed shapes: a 31-byte hash or a
+  // uint64 overflow is a different value than the sender meant, so it throws.
+  if (type === "text") return Memo.text(truncateMemoText(trimmed));
+
+  const problem = memoValueError(type, trimmed);
+  if (problem) throw new Error(problem);
+
+  switch (type) {
+    case "id":
+      return Memo.id(trimmed);
+    case "hash":
+      return Memo.hash(trimmed);
+    case "return":
+      return Memo.return(trimmed);
+    default:
+      return Memo.text(truncateMemoText(trimmed));
+  }
+}
+
+/**
  * USDC issuer (Circle) for the active network.
  *
  * If you intend to use USDC features on testnet, set `NEXT_PUBLIC_USDC_ISSUER`.
@@ -718,13 +803,16 @@ export async function buildPaymentTransaction({
   memo,
   memoType = "text",
   asset = "XLM",
+  baseFee,
 }: {
   fromPublicKey: string;
   toPublicKey: string;
   amount: string;
   memo?: string;
+  /** What the memo value is: `text` (default), `id`, `hash` or `return`. */
   memoType?: StellarMemoType;
   asset?: "XLM" | "USDC";
+  baseFee?: string | number;
 }): Promise<Transaction> {
   const sourceAccount = await server.loadAccount(fromPublicKey);
 
@@ -747,8 +835,10 @@ export async function buildPaymentTransaction({
     }
   }
 
+  const feeValue = baseFee ? String(baseFee) : STELLAR_BASE_FEE_STROOPS_STRING;
+
   const builder = new TransactionBuilder(sourceAccount, {
-    fee: STELLAR_BASE_FEE_STROOPS_STRING,
+    fee: feeValue,
     networkPassphrase: getNetworkPassphrase(),
   })
     .addOperation(
@@ -798,195 +888,141 @@ export async function buildAccountMergeTransaction({
   return builder.build();
 }
 
-// ── Custom asset issuance (#1147) ─────────────────────────────────────────
-
-/** Shortest allowed custom asset code. */
-export const ASSET_CODE_MIN_LENGTH = 1;
-
-/** Longest asset code the Stellar protocol accepts. */
-export const ASSET_CODE_MAX_LENGTH = 12;
-
-/** Codes the protocol reserves, e.g. the native asset. */
-export const RESERVED_ASSET_CODES = ["XLM"];
+// ─── Path Payments (#1190) ──────────────────────────────────────────────────
 
 /**
- * Validate a custom asset code.
- *
- * Stellar asset codes are 1–12 characters of uppercase `A–Z` and `0–9`. Spaces,
- * lowercase letters and symbols are rejected, and `XLM` is reserved for the
- * native asset.
- *
- * @param code - The candidate asset code.
- * @returns `null` when the code is valid, otherwise a human-readable reason.
+ * Represents a single path payment route returned by Horizon strictSendPaths.
  */
-export function validateAssetCode(code: string): string | null {
-  if (!code) return "Enter an asset code.";
-
-  if (code.length < ASSET_CODE_MIN_LENGTH || code.length > ASSET_CODE_MAX_LENGTH) {
-    return `Asset code must be between ${ASSET_CODE_MIN_LENGTH} and ${ASSET_CODE_MAX_LENGTH} characters.`;
-  }
-
-  if (/\s/.test(code)) return "Asset code cannot contain spaces.";
-
-  if (!/^[A-Z0-9]+$/.test(code)) {
-    return "Asset code must use uppercase letters and numbers only.";
-  }
-
-  if (RESERVED_ASSET_CODES.includes(code)) {
-    return `${code} is reserved for the native Stellar asset.`;
-  }
-
-  return null;
+export interface PathPaymentRoute {
+  /** The asset sent by the source account. */
+  sourceAsset: Asset;
+  /** Amount the source account sends. */
+  sourceAmount: string;
+  /** The asset received by the destination account. */
+  destinationAsset: Asset;
+  /** Amount the destination account receives. */
+  destinationAmount: string;
+  /** Intermediate assets in the conversion path. */
+  path: Asset[];
+  /** Human-readable exchange rate: destAmount / sourceAmount */
+  exchangeRate: number;
 }
 
 /**
- * Validate a home domain (the domain publishing a SEP-0001 `stellar.toml`).
+ * Query Horizon for the best strict-send paths converting one asset to another via the DEX.
  *
- * @returns `null` when valid or empty (the field is optional).
+ * @param sourceAsset - Asset to send (e.g. XLM native).
+ * @param sourceAmount - Amount to send in string form, e.g. "10.0000000".
+ * @param destinationAsset - Asset the recipient should receive.
+ * @returns Array of available path payment routes, sorted by best destination amount.
  */
-export function validateHomeDomain(domain: string): string | null {
-  if (!domain.trim()) return null;
-
-  const hostname = domain
-    .trim()
-    .replace(/^https?:\/\//i, "")
-    .replace(/\/.*$/, "");
-
-  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(hostname)) {
-    return "Enter a valid domain, e.g. example.com";
-  }
-
-  return null;
-}
-
-/**
- * Build an unsigned payment of a custom asset from the issuer to a
- * distributor — the "issue" half of asset issuance.
- *
- * The distributor must already hold a trustline for the asset, otherwise
- * Stellar rejects the payment.
- *
- * @throws {Error} If the asset code is invalid or the issuer account cannot be loaded.
- */
-export async function buildAssetIssueTransaction({
-  issuerPublicKey,
-  distributorPublicKey,
-  assetCode,
-  amount,
+export async function findStrictSendPaths({
+  sourceAsset,
+  sourceAmount,
+  destinationAsset,
 }: {
-  issuerPublicKey: string;
-  distributorPublicKey: string;
-  assetCode: string;
-  amount: string;
+  sourceAsset: Asset;
+  sourceAmount: string;
+  destinationAsset: Asset;
+}): Promise<PathPaymentRoute[]> {
+  try {
+    const result = await server
+      .strictSendPaths(sourceAsset, sourceAmount, [destinationAsset])
+      .call();
+
+    return result.records.map((record: any) => {
+      const srcAsset =
+        record.source_asset_type === "native"
+          ? Asset.native()
+          : new Asset(record.source_asset_code, record.source_asset_issuer);
+
+      const destAsset =
+        record.destination_asset_type === "native"
+          ? Asset.native()
+          : new Asset(record.destination_asset_code, record.destination_asset_issuer);
+
+      const intermediaryPath: Asset[] = (record.path || []).map((p: any) =>
+        p.asset_type === "native"
+          ? Asset.native()
+          : new Asset(p.asset_code, p.asset_issuer)
+      );
+
+      const srcAmt = parseFloat(record.source_amount || sourceAmount);
+      const destAmt = parseFloat(record.destination_amount || "0");
+      const exchangeRate = srcAmt > 0 ? destAmt / srcAmt : 0;
+
+      return {
+        sourceAsset: srcAsset,
+        sourceAmount: record.source_amount || sourceAmount,
+        destinationAsset: destAsset,
+        destinationAmount: record.destination_amount || "0",
+        path: intermediaryPath,
+        exchangeRate,
+      };
+    });
+  } catch (err) {
+    console.error("Failed to find strict send paths:", err);
+    return [];
+  }
+}
+
+/**
+ * Build an unsigned pathPaymentStrictSend transaction ready for Freighter to sign.
+ *
+ * Sends an exact `sendAmount` of `sendAsset` and delivers at least `minDestAmount`
+ * of `destAsset` to the recipient. Any DEX conversion happens automatically.
+ *
+ * @param params.fromPublicKey - Sender's Stellar public key.
+ * @param params.toPublicKey - Recipient's Stellar public key.
+ * @param params.sendAsset - Asset being sent (e.g. XLM native).
+ * @param params.sendAmount - Exact amount to send.
+ * @param params.destAsset - Asset to be received by the recipient.
+ * @param params.minDestAmount - Minimum amount recipient should receive (slippage protection).
+ * @param params.path - Intermediate conversion assets found via {@link findStrictSendPaths}.
+ * @param params.memo - Optional memo text.
+ */
+export async function buildPathPaymentStrictSendTransaction({
+  fromPublicKey,
+  toPublicKey,
+  sendAsset,
+  sendAmount,
+  destAsset,
+  minDestAmount,
+  path = [],
+  memo,
+}: {
+  fromPublicKey: string;
+  toPublicKey: string;
+  sendAsset: Asset;
+  sendAmount: string;
+  destAsset: Asset;
+  minDestAmount: string;
+  path?: Asset[];
+  memo?: string;
 }): Promise<Transaction> {
-  const codeError = validateAssetCode(assetCode);
-  if (codeError) throw new Error(codeError);
+  const sourceAccount = await server.loadAccount(fromPublicKey);
 
-  const sourceAccount = await server.loadAccount(issuerPublicKey);
-
-  return new TransactionBuilder(sourceAccount, {
+  const builder = new TransactionBuilder(sourceAccount, {
     fee: STELLAR_BASE_FEE_STROOPS_STRING,
-    networkPassphrase: NETWORK_PASSPHRASE,
+    networkPassphrase: getNetworkPassphrase(),
   })
     .addOperation(
-      Operation.payment({
-        destination: distributorPublicKey,
-        asset: new Asset(assetCode, issuerPublicKey),
-        amount,
+      Operation.pathPaymentStrictSend({
+        sendAsset,
+        sendAmount,
+        destination: toPublicKey,
+        destAsset,
+        destMin: minDestAmount,
+        path,
       })
     )
-    .setTimeout(STELLAR_TRANSACTION_TIMEOUT_SECONDS)
-    .build();
-}
+    .setTimeout(STELLAR_TRANSACTION_TIMEOUT_SECONDS);
 
-/**
- * Build an unsigned `setOptions` transaction that sets an account's home domain.
- *
- * The domain must serve a `stellar.toml` under `/.well-known/` for wallets and
- * explorers to discover the issuer's asset metadata (SEP-0001).
- */
-export async function buildHomeDomainTransaction({
-  publicKey,
-  homeDomain,
-}: {
-  publicKey: string;
-  homeDomain: string;
-}): Promise<Transaction> {
-  const sourceAccount = await server.loadAccount(publicKey);
-
-  return new TransactionBuilder(sourceAccount, {
-    fee: STELLAR_BASE_FEE_STROOPS_STRING,
-    networkPassphrase: NETWORK_PASSPHRASE,
-  })
-    .addOperation(Operation.setOptions({ homeDomain }))
-    .setTimeout(STELLAR_TRANSACTION_TIMEOUT_SECONDS)
-    .build();
-}
-
-/** Stellar Expert URL for an issued asset, e.g. `.../asset/COOL-GABC...`. */
-export function assetExplorerUrl(assetCode: string, issuer: string): string {
-  const net = NETWORK === "mainnet" ? "public" : "testnet";
-  return `https://stellar.expert/explorer/${net}/asset/${assetCode}-${issuer}`;
-}
-
-/** SEP-0001 `stellar.toml` location for a home domain. */
-export function stellarTomlUrl(homeDomain: string): string {
-  const hostname = homeDomain
-    .trim()
-    .replace(/^https?:\/\//i, "")
-    .replace(/\/.*$/, "");
-  return `https://${hostname}/.well-known/stellar.toml`;
-}
-
-/**
- * Render the `stellar.toml` an issuer should publish for a custom asset.
- *
- * Returning it as a string lets the wizard offer a preview, a copy button and a
- * download without the user hand-writing TOML.
- */
-export function buildStellarToml({
-  homeDomain,
-  assetCode,
-  issuerPublicKey,
-  network,
-}: {
-  homeDomain: string;
-  assetCode: string;
-  issuerPublicKey: string;
-  network?: "testnet" | "mainnet";
-}): string {
-  const activeNetwork = network ?? NETWORK;
-  const accounts = [issuerPublicKey];
-
-  if (activeNetwork === "mainnet") {
-    accounts.push("GCO2IP3MCPLXT4GMQ5H7UQRCLHH3QDEM7SY6DNNJDAW6DGRITQKHXVV");
+  if (memo) {
+    builder.addMemo(Memo.text(truncateMemoText(memo)));
   }
 
-  const domain =
-    homeDomain.trim().replace(/^https?:\/\//i, "").replace(/\/.*$/, "") ||
-    "yourdomain.com";
-
-  return [
-    "# Stellar MicroPay — generated asset metadata (SEP-0001)",
-    `VERSION = "1.0.0"`,
-    `NETWORK_PASSPHRASE = "${
-      activeNetwork === "mainnet" ? Networks.PUBLIC : Networks.TESTNET
-    }"`,
-    "",
-    "[[CURRENCIES]]",
-    `code = "${assetCode}"`,
-    `issuer = "${issuerPublicKey}"`,
-    "is_asset_anchored = false",
-    `desc = "${assetCode} issued via Stellar MicroPay"`,
-    "",
-    "# Liquidity/explorer accounts that must be trusted for mainnet listings.",
-    "ACCOUNTS = [",
-    ...accounts.map((account) => `  "${account}",`),
-    "]",
-    "",
-    `# Publish this file at: ${stellarTomlUrl(domain)}`,
-    "",
-  ].join("\n");
+  return builder.build();
 }
 
 /**
@@ -1907,6 +1943,53 @@ export function feeLevelFromStroops(modeStroops: number): FeeLevel {
   if (modeStroops < STELLAR_BASE_FEE_STROOPS) return "normal";
   if (modeStroops <= ELEVATED_FEE_MAX_STROOPS) return "elevated";
   return "high";
+}
+
+export type FeeSpeed = "slow" | "normal" | "fast";
+
+export interface FeeSpeedDetail {
+  stroops: number;
+  xlm: string;
+}
+
+export interface FeeSpeedOptions {
+  slow: FeeSpeedDetail;
+  normal: FeeSpeedDetail;
+  fast: FeeSpeedDetail;
+}
+
+/**
+ * Fetches fee percentiles (p10, p50, p90) from Horizon /fee_stats
+ * for slow/normal/fast transaction speed options.
+ */
+export async function fetchFeePercentiles(): Promise<FeeSpeedOptions> {
+  try {
+    const config = getNetworkConfig();
+    const url = `${config.horizonUrl}/fee_stats`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Horizon fee_stats returned ${res.status}`);
+    }
+    const data = (await res.json()) as {
+      fee_charged?: { p10?: string; p50?: string; p90?: string; mode?: string };
+    };
+
+    const p10 = Math.max(100, parseInt(data.fee_charged?.p10 ?? "100", 10) || 100);
+    const p50 = Math.max(p10, parseInt(data.fee_charged?.p50 ?? "200", 10) || 200);
+    const p90 = Math.max(p50, parseInt(data.fee_charged?.p90 ?? "500", 10) || 500);
+
+    return {
+      slow: { stroops: p10, xlm: (p10 / STELLAR_STROOPS_PER_XLM).toFixed(7) },
+      normal: { stroops: p50, xlm: (p50 / STELLAR_STROOPS_PER_XLM).toFixed(7) },
+      fast: { stroops: p90, xlm: (p90 / STELLAR_STROOPS_PER_XLM).toFixed(7) },
+    };
+  } catch {
+    return {
+      slow: { stroops: 100, xlm: "0.0000100" },
+      normal: { stroops: 200, xlm: "0.0000200" },
+      fast: { stroops: 500, xlm: "0.0000500" },
+    };
+  }
 }
 
 // ── DEX Trading Helpers ───────────────────────────────────────────────────

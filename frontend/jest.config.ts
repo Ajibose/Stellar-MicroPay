@@ -9,6 +9,14 @@ const config: Config = {
   setupFiles: ["<rootDir>/jest.polyfills.ts"],
   setupFilesAfterEnv: ["@testing-library/jest-dom"],
   testPathIgnorePatterns: ["<rootDir>/e2e/"],
+  coverageThreshold: {
+    global: {
+      statements: 80,
+      branches: 75,
+      lines: 80,
+      functions: 80,
+    },
+  },
 };
 
 export default config;
