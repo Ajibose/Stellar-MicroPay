@@ -200,6 +200,18 @@ export function truncateMemoText(memo: string): string {
 }
 
 /**
+ * Encode memo text as UTF-8 bytes in the local Uint8Array realm.
+ *
+ * `TextEncoder` may return a Uint8Array from a different realm (e.g. Node's
+ * while running under jsdom), which fails the SDK's `instanceof Uint8Array`
+ * check. Rebuilding through the local constructor keeps the bytes identical
+ * while satisfying the type guard.
+ */
+function encodeMemoText(value: string): Uint8Array {
+  return Uint8Array.from(new TextEncoder().encode(value));
+}
+
+/**
  * Memo types the Stellar protocol defines, and the ones the payment form offers.
  */
 export type StellarMemoType = "text" | "id" | "hash" | "return";
@@ -267,7 +279,9 @@ export function buildMemo(type: StellarMemoType, value: string): Memo {
   // Text is the one type the protocol lets you trim to fit, so it is shortened
   // rather than refused. The other three have fixed shapes: a 31-byte hash or a
   // uint64 overflow is a different value than the sender meant, so it throws.
-  if (type === "text") return Memo.text(truncateMemoText(trimmed));
+  if (type === "text") {
+    return Memo.text(encodeMemoText(truncateMemoText(trimmed)));
+  }
 
   const problem = memoValueError(type, trimmed);
   if (problem) throw new Error(problem);
@@ -280,7 +294,7 @@ export function buildMemo(type: StellarMemoType, value: string): Memo {
     case "return":
       return Memo.return(trimmed);
     default:
-      return Memo.text(truncateMemoText(trimmed));
+      return Memo.text(encodeMemoText(truncateMemoText(trimmed)));
   }
 }
 
@@ -755,7 +769,7 @@ export function createStellarMemo(type: StellarMemoType, value: string): Memo {
 
   switch (type) {
     case "text":
-      return Memo.text(truncateMemoText(trimmed));
+      return Memo.text(encodeMemoText(truncateMemoText(trimmed)));
     case "id": {
       if (!/^\d+$/.test(trimmed)) {
         throw new Error("MEMO_ID must be a non-negative uint64 integer");
@@ -868,6 +882,145 @@ export async function buildAccountMergeTransaction({
       })
     )
     .setTimeout(STELLAR_TRANSACTION_TIMEOUT_SECONDS);
+
+  return builder.build();
+}
+
+// ─── Path Payments (#1190) ──────────────────────────────────────────────────
+
+/**
+ * Represents a single path payment route returned by Horizon strictSendPaths.
+ */
+export interface PathPaymentRoute {
+  /** The asset sent by the source account. */
+  sourceAsset: Asset;
+  /** Amount the source account sends. */
+  sourceAmount: string;
+  /** The asset received by the destination account. */
+  destinationAsset: Asset;
+  /** Amount the destination account receives. */
+  destinationAmount: string;
+  /** Intermediate assets in the conversion path. */
+  path: Asset[];
+  /** Human-readable exchange rate: destAmount / sourceAmount */
+  exchangeRate: number;
+}
+
+/**
+ * Query Horizon for the best strict-send paths converting one asset to another via the DEX.
+ *
+ * @param sourceAsset - Asset to send (e.g. XLM native).
+ * @param sourceAmount - Amount to send in string form, e.g. "10.0000000".
+ * @param destinationAsset - Asset the recipient should receive.
+ * @returns Array of available path payment routes, sorted by best destination amount.
+ */
+export async function findStrictSendPaths({
+  sourceAsset,
+  sourceAmount,
+  destinationAsset,
+}: {
+  sourceAsset: Asset;
+  sourceAmount: string;
+  destinationAsset: Asset;
+}): Promise<PathPaymentRoute[]> {
+  try {
+    const result = await server
+      .strictSendPaths(sourceAsset, sourceAmount, [destinationAsset])
+      .call();
+
+    return result.records.map((record: any) => {
+      const srcAsset =
+        record.source_asset_type === "native"
+          ? Asset.native()
+          : new Asset(record.source_asset_code, record.source_asset_issuer);
+
+      const destAsset =
+        record.destination_asset_type === "native"
+          ? Asset.native()
+          : new Asset(record.destination_asset_code, record.destination_asset_issuer);
+
+      const intermediaryPath: Asset[] = (record.path || []).map((p: any) =>
+        p.asset_type === "native"
+          ? Asset.native()
+          : new Asset(p.asset_code, p.asset_issuer)
+      );
+
+      const srcAmt = parseFloat(record.source_amount || sourceAmount);
+      const destAmt = parseFloat(record.destination_amount || "0");
+      const exchangeRate = srcAmt > 0 ? destAmt / srcAmt : 0;
+
+      return {
+        sourceAsset: srcAsset,
+        sourceAmount: record.source_amount || sourceAmount,
+        destinationAsset: destAsset,
+        destinationAmount: record.destination_amount || "0",
+        path: intermediaryPath,
+        exchangeRate,
+      };
+    });
+  } catch (err) {
+    console.error("Failed to find strict send paths:", err);
+    return [];
+  }
+}
+
+/**
+ * Build an unsigned pathPaymentStrictSend transaction ready for Freighter to sign.
+ *
+ * Sends an exact `sendAmount` of `sendAsset` and delivers at least `minDestAmount`
+ * of `destAsset` to the recipient. Any DEX conversion happens automatically.
+ *
+ * @param params.fromPublicKey - Sender's Stellar public key.
+ * @param params.toPublicKey - Recipient's Stellar public key.
+ * @param params.sendAsset - Asset being sent (e.g. XLM native).
+ * @param params.sendAmount - Exact amount to send.
+ * @param params.destAsset - Asset to be received by the recipient.
+ * @param params.minDestAmount - Minimum amount recipient should receive (slippage protection).
+ * @param params.path - Intermediate conversion assets found via {@link findStrictSendPaths}.
+ * @param params.memo - Optional memo text.
+ */
+export async function buildPathPaymentStrictSendTransaction({
+  fromPublicKey,
+  toPublicKey,
+  sendAsset,
+  sendAmount,
+  destAsset,
+  destMin,
+  minDestAmount,
+  path = [],
+  memo,
+}: {
+  fromPublicKey: string;
+  toPublicKey: string;
+  sendAsset: Asset;
+  sendAmount: string;
+  destAsset: Asset;
+  destMin?: string;
+  minDestAmount?: string;
+  path?: Asset[];
+  memo?: string;
+}): Promise<Transaction> {
+  const sourceAccount = await server.loadAccount(fromPublicKey);
+
+  const builder = new TransactionBuilder(sourceAccount, {
+    fee: STELLAR_BASE_FEE_STROOPS_STRING,
+    networkPassphrase: getNetworkPassphrase(),
+  })
+    .addOperation(
+      Operation.pathPaymentStrictSend({
+        sendAsset,
+        sendAmount,
+        destination: toPublicKey,
+        destAsset,
+        destMin: minDestAmount ?? destMin ?? "0",
+        path,
+      })
+    )
+    .setTimeout(STELLAR_TRANSACTION_TIMEOUT_SECONDS);
+
+  if (memo) {
+    builder.addMemo(Memo.text(encodeMemoText(truncateMemoText(memo))));
+  }
 
   return builder.build();
 }
@@ -2284,45 +2437,6 @@ export async function fetchStrictSendPaths({
     path,
     exchangeRate,
   };
-}
-
-/**
- * Build a pathPaymentStrictSend transaction for DEX swaps.
- */
-export async function buildPathPaymentStrictSendTransaction({
-  fromPublicKey,
-  toPublicKey,
-  sendAsset,
-  sendAmount,
-  destAsset,
-  destMin,
-  path,
-}: {
-  fromPublicKey: string;
-  toPublicKey: string;
-  sendAsset: Asset;
-  sendAmount: string;
-  destAsset: Asset;
-  destMin: string;
-  path: Asset[];
-}): Promise<Transaction> {
-  const sourceAccount = await server.loadAccount(fromPublicKey);
-  return new TransactionBuilder(sourceAccount, {
-    fee: STELLAR_BASE_FEE_STROOPS_STRING,
-    networkPassphrase: getNetworkPassphrase(),
-  })
-    .addOperation(
-      Operation.pathPaymentStrictSend({
-        sendAsset,
-        sendAmount,
-        destination: toPublicKey,
-        destAsset,
-        destMin,
-        path,
-      })
-    )
-    .setTimeout(STELLAR_TRANSACTION_TIMEOUT_SECONDS)
-    .build();
 }
 
 /**

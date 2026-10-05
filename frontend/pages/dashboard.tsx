@@ -1115,9 +1115,9 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
           tabIndex={-1}
           className="font-display text-3xl font-bold text-white mb-1 outline-none"
         >
-          Dashboard
+          {t("dashboard.title")}
         </h1>
-        <p className="text-slate-400 text-sm">Send and receive XLM globally</p>
+        <p className="text-slate-400 text-sm">{t("dashboard.tagline")}</p>
         <div className="mt-4">
           <button
             onClick={handleToggleNotifications}
@@ -1295,7 +1295,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
         <div className="absolute top-0 right-0 w-48 h-48 bg-stellar-500/5 rounded-full blur-2xl pointer-events-none" />
         <div className="relative flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <p className="label mb-1">Wallet Address</p>
+            <p className="label mb-1">{t("dashboard.walletAddress")}</p>
             <button
               onClick={() => setAddressExpanded((x) => !x)}
               className="font-mono text-sm text-slate-300 select-text cursor-pointer hover:text-white transition-colors text-left break-all"
@@ -1798,7 +1798,7 @@ function PaymentStatsWidget({
     <section className="grid grid-cols-1 gap-4 sm:grid-cols-3 mb-6">
       <StatsCard
         label="Total Sent"
-        value={formatStatsXLM(stats.totalSentXLM)}
+        value={formatStatsXLM(stats.totalSentXLM, t("dashboard.suffixSent"))}
         helper={`${stats.sentCount} outgoing payment${stats.sentCount === 1 ? "" : "s"}`}
         delta={volumeDelta}
         deltaType={typeof volumeDelta === "number" ? (volumeDelta > 0 ? "positive" : volumeDelta < 0 ? "negative" : "neutral") : undefined}
@@ -2007,12 +2007,12 @@ function StatsCard({
 function formatStatsXLM(amount: string, suffix = "") {
   const value = parseFloat(amount);
 
-  if (Number.isNaN(value)) return `0.00 XLM ${suffix}`;
+  if (Number.isNaN(value)) return `0.00 XLM ${suffix}`.trim();
 
   return `${value.toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 7,
-  })} XLM ${suffix}`;
+  })} XLM ${suffix}`.trim();
 }
 
 // ─── Sparkline chart ─────────────────────────────────────────────────────────
