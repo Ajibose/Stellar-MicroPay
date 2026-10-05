@@ -6,6 +6,7 @@
 "use strict";
 
 const stellarService = require("../services/stellarService");
+const streamService = require("../services/streamService");
 
 /** Stellar account IDs are 'G' + 55 base32 characters, 56 in total. */
 const STELLAR_PUBLIC_KEY_RE = /^G[A-Z2-7]{55}$/;
@@ -186,22 +187,8 @@ async function getStats(req, res, next) {
 async function getStreamStatus(req, res, next) {
   try {
     const { streamId } = req.params;
-
-    // Placeholder implementation - in production this would query the Soroban contract
-    // For now, return a mock response structure
-    res.json({
-      success: true,
-      data: {
-        streamId,
-        payer: "GEXAMPLEPAYERADDRESS",
-        recipient: "GEXAMPLERECIPIENTADDRESS",
-        ratePerHour: "10.0000000", // XLM per hour
-        deposit: "100.0000000", // Total XLM deposited
-        claimable: "25.5000000", // XLM available to claim
-        startTime: new Date(Date.now() - 86400000).toISOString(),
-        isActive: true,
-      },
-    });
+    const status = await streamService.getStreamStatus(streamId);
+    res.json({ success: true, data: status });
   } catch (err) {
     next(err);
   }

@@ -39,9 +39,11 @@ import {
   type FeeSpeedOptions,
 } from "@/lib/stellar";
 import { Asset, Federation } from "@stellar/stellar-sdk";
+import { parseHorizonSubmissionError } from "@/lib/horizonErrors";
 import { signTransactionWithWallet } from "@/lib/wallet";
 import { resolveSNSDomain } from "@/utils/snsResolver";
 import { formatXLM, shortenAddress } from "@/utils/format";
+import { useTranslation } from "@/contexts/I18nContext";
 import clsx from "clsx";
 import { useEffect, useRef, useState } from "react";
 
@@ -425,7 +427,7 @@ export default function SendPaymentForm({
 
   const memoPlaceholder =
     memoType === "text"
-      ? "Payment note..."
+      ? t("sendPayment.memoPlaceholder")
       : memoType === "id"
         ? "uint64 integer, e.g. 12345"
         : "64-character hex (32 bytes)";
@@ -455,6 +457,11 @@ export default function SendPaymentForm({
       window.clearInterval(intervalId);
     };
   }, []);
+
+  const amountNum = parseFloat(amount);
+  const hasAmount = Number.isFinite(amountNum) && amountNum > 0;
+  const estimatedTotalDeducted = hasAmount ? amountNum + networkFeeXlm : null;
+  const isValidDest = destination.length > 0 && isValidStellarAddress(destination);
 
   // Fetch path payment routes when Convert & Send is enabled and amount/destination changes
   useEffect(() => {
@@ -499,7 +506,7 @@ export default function SendPaymentForm({
       clearTimeout(debounce);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isConvertAndSend, amount, destination, selectedAsset, convertDestAsset, isValidDest]);
+  }, [isConvertAndSend, amount, destination, selectedAsset, convertDestAsset]);
 
   useEffect(() => {
     if (!prefill) return;
@@ -515,11 +522,6 @@ export default function SendPaymentForm({
     selectedAsset === "XLM"
       ? Math.max(0, xlmBal - STELLAR_MINIMUM_ACCOUNT_BALANCE_XLM - networkFeeXlm)
       : usdcBal;
-
-  const amountNum = parseFloat(amount);
-  const hasAmount = Number.isFinite(amountNum) && amountNum > 0;
-  const estimatedTotalDeducted = hasAmount ? amountNum + networkFeeXlm : null;
-  const isValidDest = destination.length > 0 && isValidStellarAddress(destination);
 
   const isUsernameDestination = /^@?[a-zA-Z0-9]{3,20}$/.test(destination) && !isValidStellarAddress(destination);
   const isSNSDestination = destination.toLowerCase().endsWith(".xlm");
@@ -1408,7 +1410,7 @@ export default function SendPaymentForm({
 
         {!hideMemoField && (
           <div>
-            <label className="label" htmlFor="memo-type">Memo (optional)</label>
+            <label className="label" htmlFor="memo-type">{t("sendPayment.memoOptional")}</label>
             <select
               id="memo-type"
               value={memoType}
@@ -1646,6 +1648,7 @@ interface SendConfirmationModalProps {
 }
 
 function SendConfirmationModal({ isOpen, destination, amount, memo, memoType, estimatedFee, usdValue, onCancel, onConfirm }: SendConfirmationModalProps) {
+  const { t } = useTranslation();
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">

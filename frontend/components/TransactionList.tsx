@@ -12,7 +12,7 @@ import {
   PaymentRecord,
   PaymentHistoryResponse,
 } from "@/lib/stellar";
-import { formatAsset, timeAgo, copyToClipboard } from "@/utils/format";
+import { formatAsset, timeAgo, copyToClipboard, exportFilteredTransactionsToCSV } from "@/utils/format";
 import { loadAllPaymentNotes, savePaymentNote } from "@/lib/usePaymentNotes";
 import { useToast } from "@/lib/useToast";
 import Toast from "@/components/Toast";

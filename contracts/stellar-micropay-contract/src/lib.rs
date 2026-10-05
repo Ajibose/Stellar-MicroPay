@@ -231,8 +231,23 @@ pub enum DataKey {
     MilestoneEscrow(u32),
     /// Number of milestone escrows ever created (the next escrow id)
     MilestoneEscrowCount,
-    /// Emergency pause flag; `true` means state-changing calls are rejected
+    /// Global circuit-breaker: while true, state-changing calls are rejected.
     Frozen,
+}
+
+/// Reject the call if the contract is frozen.
+///
+/// Read-only getters intentionally do not call this, so a frozen contract
+/// stays queryable while state-changing operations are halted.
+fn require_not_frozen(env: &Env) {
+    let frozen: bool = env
+        .storage()
+        .instance()
+        .get(&DataKey::Frozen)
+        .unwrap_or(false);
+    if frozen {
+        panic!("Contract is frozen");
+    }
 }
 
 /// Event payload emitted when a tip is sent, capturing the gross tip
