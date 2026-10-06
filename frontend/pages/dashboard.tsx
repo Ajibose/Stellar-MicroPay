@@ -379,14 +379,19 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
   const [topRecipients, setTopRecipients] = useState<Array<{ address: string; totalXLMSent: string }>>([]);
   const [topRecipientsLoading, setTopRecipientsLoading] = useState(false);
   const [csvExporting, setCsvExporting] = useState(false);
+  const [balanceHistoryNow, setBalanceHistoryNow] = useState<number | null>(null);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setBalanceHistoryNow(Date.now()), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   // Balance history calculation over past 30 days (#1188)
   const balanceHistoryData = useMemo(() => {
-    if (!recentPaymentsForStats.length || !xlmBalance) return [];
+    if (!recentPaymentsForStats.length || !xlmBalance || balanceHistoryNow === null) return [];
 
     const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
-    const now = Date.now();
-    const thirtyDaysAgo = now - THIRTY_DAYS_MS;
+    const thirtyDaysAgo = balanceHistoryNow - THIRTY_DAYS_MS;
 
     const payments30d = recentPaymentsForStats
       .filter((p) => new Date(p.createdAt).getTime() >= thirtyDaysAgo)
@@ -426,7 +431,7 @@ export default function Dashboard({ stellarURI }: DashboardProps) {
     }
 
     return points;
-  }, [recentPaymentsForStats, xlmBalance]);
+  }, [recentPaymentsForStats, xlmBalance, balanceHistoryNow]);
 
   // Notification state
   const [notificationEnabled, setNotificationEnabled] = useState(false);
