@@ -14,7 +14,7 @@ const paymentController = require("../controllers/paymentController");
 const {
   horizonCircuitBreakerMiddleware,
 } = require("../middleware/horizonCircuitBreaker");
-const { requireSignedRequest } = require("../src/middleware/requestSignature");
+const { requireSignedRequest } = require("../middleware/requestSignature");
 
 /**
  * POST /api/payments/submit
