@@ -51,10 +51,20 @@ jobs:
           cache-dependency-path: |
             frontend/package-lock.json
             backend/package-lock.json
+      - name: Cache Node.js dependencies
+        id: node-modules-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            frontend/node_modules
+            backend/node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
       - name: Install frontend dependencies
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
         run: npm ci
         working-directory: frontend
       - name: Install backend dependencies
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
         run: npm ci
         working-directory: backend
       - name: ESLint (frontend)

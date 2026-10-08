@@ -235,21 +235,6 @@ pub enum DataKey {
     Frozen,
 }
 
-/// Reject the call if the contract is frozen.
-///
-/// Read-only getters intentionally do not call this, so a frozen contract
-/// stays queryable while state-changing operations are halted.
-fn require_not_frozen(env: &Env) {
-    let frozen: bool = env
-        .storage()
-        .instance()
-        .get(&DataKey::Frozen)
-        .unwrap_or(false);
-    if frozen {
-        panic!("Contract is frozen");
-    }
-}
-
 /// Event payload emitted when a tip is sent, capturing the gross tip
 /// amount and any operator fee that was deducted from it.
 #[contracttype]

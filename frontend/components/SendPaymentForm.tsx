@@ -43,6 +43,7 @@ import { parseHorizonSubmissionError } from "@/lib/horizonErrors";
 import { signTransactionWithWallet } from "@/lib/wallet";
 import { resolveSNSDomain } from "@/utils/snsResolver";
 import { formatXLM, shortenAddress } from "@/utils/format";
+import { submitSignedPayment } from "@/lib/paymentApi";
 import { useTranslation } from "@/contexts/I18nContext";
 import clsx from "clsx";
 import { useEffect, useRef, useState } from "react";

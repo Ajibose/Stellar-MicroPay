@@ -119,7 +119,9 @@ async function withCache(key, fn) {
  */
 async function getSummary(publicKey) {
   return withCache(`summary:${publicKey}`, async () => {
-    const payments = await stellarService.getPayments(publicKey, { limit: 200 });
+    const payments = await stellarService.getPayments(publicKey, {
+      limit: 200,
+    });
 
     let totalSent = 0;
     let totalReceived = 0;
@@ -165,14 +167,18 @@ async function getSummary(publicKey) {
     // Compute percentage deltas
     let countChangePercent = 0;
     if (lastWeekCount > 0) {
-      countChangePercent = Math.round(((thisWeekCount - lastWeekCount) / lastWeekCount) * 100);
+      countChangePercent = Math.round(
+        ((thisWeekCount - lastWeekCount) / lastWeekCount) * 100,
+      );
     } else if (thisWeekCount > 0) {
       countChangePercent = 100; // 100% increase if last week was 0
     }
 
     let volumeChangePercent = 0;
     if (lastWeekVolume > 0) {
-      volumeChangePercent = Math.round(((thisWeekVolume - lastWeekVolume) / lastWeekVolume) * 100);
+      volumeChangePercent = Math.round(
+        ((thisWeekVolume - lastWeekVolume) / lastWeekVolume) * 100,
+      );
     } else if (thisWeekVolume > 0) {
       volumeChangePercent = 100;
     }
@@ -201,7 +207,9 @@ async function getSummary(publicKey) {
  */
 async function getTopRecipients(publicKey) {
   return withCache(`top-recipients:${publicKey}`, async () => {
-    const payments = await stellarService.getPayments(publicKey, { limit: 200 });
+    const payments = await stellarService.getPayments(publicKey, {
+      limit: 200,
+    });
 
     // Map to track total sent per recipient
     const recipientTotals = new Map();
@@ -215,7 +223,7 @@ async function getTopRecipients(publicKey) {
         if (recipientTotals.has(recipient)) {
           recipientTotals.set(
             recipient,
-            recipientTotals.get(recipient) + amount
+            recipientTotals.get(recipient) + amount,
           );
         } else {
           recipientTotals.set(recipient, amount);
@@ -246,7 +254,9 @@ async function getTopRecipients(publicKey) {
  */
 async function getActivityByDay(publicKey) {
   return withCache(`activity:${publicKey}`, async () => {
-    const payments = await stellarService.getPayments(publicKey, { limit: 200 });
+    const payments = await stellarService.getPayments(publicKey, {
+      limit: 200,
+    });
 
     // Initialize counters for all 7 days
     const dayActivity = {
@@ -267,7 +277,15 @@ async function getActivityByDay(publicKey) {
     }
 
     // Convert to array format
-    const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const days = [
+      "Sunday",
+      "Monday",
+      "Tuesday",
+      "Wednesday",
+      "Thursday",
+      "Friday",
+      "Saturday",
+    ];
     const activity = days.map((dayName, index) => ({
       day: dayName,
       dayIndex: index,
@@ -380,8 +398,12 @@ function formatCohortBucketLabel(bucketStart, period) {
 }
 
 function formatCohortBucket(bucket, period) {
-  const sentCounterparties = summarizeCounterparties(bucket.sent.counterparties);
-  const receivedCounterparties = summarizeCounterparties(bucket.received.counterparties);
+  const sentCounterparties = summarizeCounterparties(
+    bucket.sent.counterparties,
+  );
+  const receivedCounterparties = summarizeCounterparties(
+    bucket.received.counterparties,
+  );
 
   return {
     periodStart: bucket.bucketStart.toISOString(),
@@ -398,7 +420,8 @@ function formatCohortBucket(bucket, period) {
       counterparties: receivedCounterparties,
     },
     totalCounterparties:
-      sentCounterparties.totalCounterparties + receivedCounterparties.totalCounterparties,
+      sentCounterparties.totalCounterparties +
+      receivedCounterparties.totalCounterparties,
     repeatRate: calculateRepeatRate(sentCounterparties, receivedCounterparties),
     period,
   };
@@ -425,14 +448,16 @@ function summarizeCounterparties(counterpartyCounts) {
 
 function calculateRepeatRate(sentCounterparties, receivedCounterparties) {
   const totalCounterparties =
-    sentCounterparties.totalCounterparties + receivedCounterparties.totalCounterparties;
+    sentCounterparties.totalCounterparties +
+    receivedCounterparties.totalCounterparties;
 
   if (totalCounterparties === 0) {
     return 0;
   }
 
   const repeatCounterparties =
-    sentCounterparties.repeatCounterparties + receivedCounterparties.repeatCounterparties;
+    sentCounterparties.repeatCounterparties +
+    receivedCounterparties.repeatCounterparties;
   return Math.round((repeatCounterparties / totalCounterparties) * 100);
 }
 
@@ -445,60 +470,79 @@ function calculateRepeatRate(sentCounterparties, receivedCounterparties) {
  * - one-time: exactly one payment in the period
  * - repeat: two or more payments in the period
  */
-async function getCohortBreakdown(publicKey, { period = "month", periods = 6 } = {}) {
+async function getCohortBreakdown(
+  publicKey,
+  { period = "month", periods = 6 } = {},
+) {
   const normalizedPeriod = normalizeCohortPeriod(period);
   const normalizedCount = normalizeCohortPeriodCount(periods);
 
-  return withCache(`cohorts:${publicKey}:${normalizedPeriod}:${normalizedCount}`, async () => {
-    const payments = await stellarService.getPayments(publicKey, { limit: 200 });
-    const buckets = buildCohortBuckets(normalizedPeriod, normalizedCount);
-    const bucketMap = new Map(buckets.map((bucket) => [bucket.bucketStart.getTime(), bucket]));
+  return withCache(
+    `cohorts:${publicKey}:${normalizedPeriod}:${normalizedCount}`,
+    async () => {
+      const payments = await stellarService.getPayments(publicKey, {
+        limit: 200,
+      });
+      const buckets = buildCohortBuckets(normalizedPeriod, normalizedCount);
+      const bucketMap = new Map(
+        buckets.map((bucket) => [bucket.bucketStart.getTime(), bucket]),
+      );
 
-    const oldestBucketStart = buckets[0]?.bucketStart ?? null;
-    const newestBucketStart = buckets[buckets.length - 1]?.bucketStart ?? null;
+      const oldestBucketStart = buckets[0]?.bucketStart ?? null;
+      const newestBucketStart =
+        buckets[buckets.length - 1]?.bucketStart ?? null;
 
-    for (const payment of payments) {
-      const paymentDate = new Date(payment.createdAt);
-      const bucketStart = getCohortBucketStart(paymentDate, normalizedPeriod);
+      for (const payment of payments) {
+        const paymentDate = new Date(payment.createdAt);
+        const bucketStart = getCohortBucketStart(paymentDate, normalizedPeriod);
 
-      if (!bucketMap.has(bucketStart.getTime())) {
-        continue;
+        if (!bucketMap.has(bucketStart.getTime())) {
+          continue;
+        }
+
+        const bucket = bucketMap.get(bucketStart.getTime());
+        const amount = parseFloat(payment.amount);
+        const counterparty =
+          payment.type === "sent" ? payment.to : payment.from;
+
+        if (payment.type === "sent") {
+          bucket.sent.paymentCount += 1;
+          bucket.sent.totalXLM += amount;
+          bucket.sent.counterparties.set(
+            counterparty,
+            (bucket.sent.counterparties.get(counterparty) || 0) + 1,
+          );
+        } else {
+          bucket.received.paymentCount += 1;
+          bucket.received.totalXLM += amount;
+          bucket.received.counterparties.set(
+            counterparty,
+            (bucket.received.counterparties.get(counterparty) || 0) + 1,
+          );
+        }
       }
 
-      const bucket = bucketMap.get(bucketStart.getTime());
-      const amount = parseFloat(payment.amount);
-      const counterparty = payment.type === "sent" ? payment.to : payment.from;
+      const cohorts = buckets.map((bucket) =>
+        formatCohortBucket(bucket, normalizedPeriod),
+      );
 
-      if (payment.type === "sent") {
-        bucket.sent.paymentCount += 1;
-        bucket.sent.totalXLM += amount;
-        bucket.sent.counterparties.set(
-          counterparty,
-          (bucket.sent.counterparties.get(counterparty) || 0) + 1
-        );
-      } else {
-        bucket.received.paymentCount += 1;
-        bucket.received.totalXLM += amount;
-        bucket.received.counterparties.set(
-          counterparty,
-          (bucket.received.counterparties.get(counterparty) || 0) + 1
-        );
-      }
-    }
-
-    const cohorts = buckets.map((bucket) => formatCohortBucket(bucket, normalizedPeriod));
-
-    return {
-      publicKey,
-      period: normalizedPeriod,
-      periods: normalizedCount,
-      range: {
-        start: oldestBucketStart ? oldestBucketStart.toISOString() : null,
-        end: newestBucketStart ? getCohortBucketEnd(newestBucketStart, normalizedPeriod).toISOString() : null,
-      },
-      cohorts,
-    };
-  });
+      return {
+        publicKey,
+        period: normalizedPeriod,
+        periods: normalizedCount,
+        range: {
+          start: oldestBucketStart ? oldestBucketStart.toISOString() : null,
+          end: newestBucketStart
+            ? getCohortBucketEnd(
+                newestBucketStart,
+                normalizedPeriod,
+              ).toISOString()
+            : null,
+        },
+        cohorts,
+      };
+    },
+  );
 }
 
 // In-memory store for scheduled exports: Map<publicKey, { email, frequency, nextRunAt }>
@@ -596,19 +640,19 @@ async function triggerEmailExport(publicKey) {
 
     <h2>Top Recipients</h2>
     <ol>
-      ${topRecipients.topRecipients.map(r => `<li><code>${r.address}</code>: ${r.totalXLMSent} XLM</li>`).join("")}
+      ${topRecipients.topRecipients.map((r) => `<li><code>${r.address}</code>: ${r.totalXLMSent} XLM</li>`).join("")}
     </ol>
 
     <h2>Weekly Activity</h2>
     <ul>
-      ${activity.activityByDay.map(d => `<li>${d.day}: ${d.transactionCount} payments</li>`).join("")}
+      ${activity.activityByDay.map((d) => `<li>${d.day}: ${d.transactionCount} payments</li>`).join("")}
     </ul>
   `;
 
   const emailService = getEmailService();
   if (!emailService) {
     const error = new Error(
-      "Scheduled email exports are unavailable: no email transport is configured"
+      "Scheduled email exports are unavailable: no email transport is configured",
     );
     error.status = 501;
     throw error;
@@ -633,10 +677,13 @@ async function triggerEmailExport(publicKey) {
  * @returns {Promise<void>}
  */
 async function clearCache(publicKey) {
-  await cache.clearByPrefix(`summary:${publicKey}`);
-  await cache.clearByPrefix(`top-recipients:${publicKey}`);
-  await cache.clearByPrefix(`activity:${publicKey}`);
-  await cache.clearByPrefix(`cohorts:${publicKey}`);
+  const counts = await Promise.all([
+    cache.clearByPrefix(`summary:${publicKey}`),
+    cache.clearByPrefix(`top-recipients:${publicKey}`),
+    cache.clearByPrefix(`activity:${publicKey}`),
+    cache.clearByPrefix(`cohorts:${publicKey}`),
+  ]);
+  return counts.reduce((a, b) => a + b, 0);
 }
 
 module.exports = {
