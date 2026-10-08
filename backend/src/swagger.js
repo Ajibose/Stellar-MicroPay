@@ -27,6 +27,14 @@ const options = {
       },
     ],
     components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "JWT",
+          description: "SEP-0010 JWT obtained from POST /api/auth",
+        },
+      },
       schemas: {
         Error: {
           type: "object",
@@ -372,6 +380,7 @@ const options = {
         },
       },
       "/api/accounts/resolve/{username}": {
+
         get: {
           tags: ["Accounts"],
           summary: "Resolve a username to a Stellar public key",
@@ -604,9 +613,7 @@ const options = {
                       success: { type: "boolean" },
                       data: {
                         type: "array",
-                        items: {
-                          $ref: "#/components/schemas/TopRecipient",
-                        },
+                        items: { $ref: "#/components/schemas/TopRecipient" },
                       },
                     },
                   },
@@ -646,6 +653,47 @@ const options = {
                 },
               },
             },
+          },
+        },
+      },
+      "/api/analytics/cache/{publicKey}": {
+        delete: {
+          tags: ["Analytics"],
+          summary: "Force-invalidate cached analytics for an account (admin only)",
+          description:
+            "Requires a valid SEP-0010 JWT. The JWT public key must be listed in ADMIN_PUBLIC_KEYS. Removes all cached analytics entries for the target account so the next request fetches fresh data from Horizon.",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "publicKey",
+              in: "path",
+              required: true,
+              schema: { type: "string", pattern: "^G[A-Z0-9]{55}$" },
+            },
+          ],
+          responses: {
+            200: {
+              description: "Cache entries invalidated",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      success: { type: "boolean" },
+                      data: {
+                        type: "object",
+                        properties: {
+                          publicKey: { type: "string" },
+                          invalidated: { type: "integer" },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: "Missing or invalid JWT" },
+            403: { description: "Caller is not an admin account" },
           },
         },
       },
@@ -792,7 +840,7 @@ const options = {
               properties: { url: { type: "string", format: "uri" }, publicKey: { type: "string" }, secret: { type: "string", format: "password" } },
             } } },
           },
-          responses: { 201: { description: "Webhook registered", content: { "application/json": { schema: { $ref: "#/components/schemas/SuccessResponse" } } } }, 400: { description: "Invalid registration" } },
+          responses: { 201: { description: "Webhook registered", content: { "application/json": { schema: { $ref: "#/components/schemas/SuccessResponse" } } } }, 400: { description: "Invalid registration payload" } },
         },
       },
       "/api/webhooks/{id}": {
@@ -875,3 +923,4 @@ const options = {
 };
 
 module.exports = swaggerJsdoc(options);
+

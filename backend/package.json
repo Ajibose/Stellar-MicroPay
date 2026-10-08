@@ -29,7 +29,9 @@
     "eslint-plugin-rulesdir": "^0.2.2",
     "jest": "^30.5.1",
     "nodemon": "^3.1.2",
-    "supertest": "^7.3.0"
+    "supertest": "^7.3.0",
+    "ts-jest": "^29.4.12",
+    "typescript": "^5"
   },
   "overrides": {
     "toml": "^4.2.0"
