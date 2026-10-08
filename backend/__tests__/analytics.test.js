@@ -26,9 +26,7 @@ describe("Analytics Service", () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     clearAnalyticsCache();
-    await analyticsService.clearCache(
-      "GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJLVXKJ46ZGFWTTNQNXNHTJXW",
-    );
+    analyticsService.clearCache("GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJLVXKJ46ZGFWTTNQNXNHTJXW");
   });
 
   const testPublicKey =
@@ -282,7 +280,7 @@ describe("Analytics Service", () => {
       await analyticsService.getSummary(testPublicKey);
       expect(stellarService.getPayments).toHaveBeenCalledTimes(1);
 
-      await analyticsService.clearCache(testPublicKey);
+      analyticsService.clearCache(testPublicKey);
 
       await analyticsService.getSummary(testPublicKey);
       expect(stellarService.getPayments).toHaveBeenCalledTimes(2);
@@ -295,18 +293,16 @@ describe("Analytics Service", () => {
       await analyticsService.getTopRecipients(testPublicKey);
       await analyticsService.getActivityByDay(testPublicKey);
 
-      expect(await analyticsService.clearCache(testPublicKey)).toBe(3);
-      expect(await analyticsService.clearCache(testPublicKey)).toBe(0);
+      expect(analyticsService.clearCache(testPublicKey)).toBe(3);
+      expect(analyticsService.clearCache(testPublicKey)).toBe(0);
     });
   });
 
   describe("LRU eviction", () => {
     it("should evict the least recently used entries beyond the max size", async () => {
       const accountCount = 600;
-      const accounts = Array.from(
-        { length: accountCount },
-        (_, i) =>
-          `GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJLVXKJ46ZGFWTTNQNXNHTJX${String(i).padStart(2, "0")}`,
+      const accounts = Array.from({ length: accountCount }, (_, i) =>
+        `GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJLVXKJ46ZGFWTTNQNXNHTJX${String(i).padStart(2, "0")}`
       );
 
       stellarService.getPayments.mockResolvedValue([]);
@@ -316,21 +312,107 @@ describe("Analytics Service", () => {
       }
 
       await analyticsService.getSummary(accounts[0]);
-      await analyticsService.getSummary(
-        "GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJLVXKJ46ZGFWTTNQNXNHTJXZZ",
-      );
+      await analyticsService.getSummary("GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJLVXKJ46ZGFWTTNQNXNHTJXZZ");
 
       const callsAfterPopulate = stellarService.getPayments.mock.calls.length;
       await analyticsService.getSummary(accounts[0]);
-      expect(stellarService.getPayments).toHaveBeenCalledTimes(
-        callsAfterPopulate,
-      );
+      expect(stellarService.getPayments).toHaveBeenCalledTimes(callsAfterPopulate);
 
       await analyticsService.getSummary(accounts[1]);
-      expect(stellarService.getPayments).toHaveBeenCalledTimes(
-        callsAfterPopulate + 1,
-      );
+      expect(stellarService.getPayments).toHaveBeenCalledTimes(callsAfterPopulate + 1);
     });
+  });
+
+  describe("admin cache invalidation endpoint", () => {
+    let app;
+    const endpointKey = "GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJLVXKJ46ZGFWTTNQNXNHTJXW2";
+
+    function authHeaderFor(publicKey) {
+      const token = jwt.sign({ publicKey }, JWT_SECRET, { expiresIn: "1h" });
+      return `Bearer ${token}`;
+    }
+
+    beforeAll(() => {
+      app = require("../src/server");
+    });
+
+    it("returns 401 without a JWT", async () => {
+      const res = await request(app).delete(`/api/analytics/cache/${testPublicKey}`);
+      expect(res.status).toBe(401);
+    });
+
+    it("returns 403 for a non-admin authenticated account", async () => {
+      process.env.ADMIN_PUBLIC_KEYS = "GBUQWP3BOUZX34ULNQG23RQ6F4BWFIYGJ2DN5ZKQYTROZXNUAAOXWS7";
+      const res = await request(app)
+        .delete(`/api/analytics/cache/${endpointKey}`)
+        .set("Authorization", authHeaderFor(endpointKey));
+      expect(res.status).toBe(403);
+    });
+
+    it("force-invalidates the cache for an admin account", async () => {
+      process.env.ADMIN_PUBLIC_KEYS = endpointKey;
+      stellarService.getPayments.mockResolvedValue(mockPayments);
+
+      await analyticsService.getSummary(endpointKey);
+      expect(stellarService.getPayments).toHaveBeenCalledTimes(1);
+
+      await analyticsService.getSummary(endpointKey);
+      expect(stellarService.getPayments).toHaveBeenCalledTimes(1);
+
+      const res = await request(app)
+        .delete(`/api/analytics/cache/${endpointKey}`)
+        .set("Authorization", authHeaderFor(endpointKey));
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        success: true,
+        data: { publicKey: endpointKey, invalidated: 1 },
+      });
+
+      await analyticsService.getSummary(endpointKey);
+      expect(stellarService.getPayments).toHaveBeenCalledTimes(2);
+    });
+
+    it("returns 403 when no admin accounts are configured", async () => {
+      delete process.env.ADMIN_PUBLIC_KEYS;
+      const res = await request(app)
+        .delete(`/api/analytics/cache/${endpointKey}`)
+        .set("Authorization", authHeaderFor(endpointKey));
+      expect(res.status).toBe(403);
+    });
+  });
+});
+
+describe("Analytics Service Cache Archiving (#1210)", () => {
+  beforeEach(() => {
+    clearAnalyticsCache();
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    stopCacheSweep();
+    jest.useRealTimers();
+  });
+
+  it("evicts entries older than 1 hour during sweep and logs eviction count", () => {
+    const logSpy = jest.spyOn(loggerModule, "info").mockImplementation(() => {});
+
+    setCachedAnalytics("G_TEST_USER_1", { volume: 100 });
+    expect(getCachedAnalytics("G_TEST_USER_1")).toEqual({ volume: 100 });
+
+    jest.advanceTimersByTime(61 * 60 * 1000);
+    jest.advanceTimersByTime(10 * 60 * 1000);
+
+    expect(getCachedAnalytics("G_TEST_USER_1")).toBeNull();
+    expect(logSpy).toHaveBeenCalledWith("Cache sweep: evicted 1 entries");
+
+    logSpy.mockRestore();
+  });
+
+  it("stops cache sweep correctly when stopCacheSweep is called", () => {
+    const clearIntervalSpy = jest.spyOn(global, "clearInterval");
+    stopCacheSweep();
+    expect(clearIntervalSpy).toHaveBeenCalled();
+    clearIntervalSpy.mockRestore();
   });
 
   describe("admin cache invalidation endpoint", () => {
