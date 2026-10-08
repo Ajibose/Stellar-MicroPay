@@ -11,6 +11,35 @@ const { strictLimiter } = require("../middleware/rateLimit");
 const { verifyJWT } = require("../middleware/auth");
 const { validatePublicKey, sanitizePublicKey } = require("../middleware/sanitization");
 const analyticsController = require("../controllers/analyticsController");
+const { verifyJWT } = require("../middleware/auth");
+const analyticsService = require("../services/analyticsService");
+
+function requireAdmin(req, res, next) {
+  const admins = (process.env.ADMIN_PUBLIC_KEYS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (admins.length === 0 || !admins.includes(req.user && req.user.publicKey)) {
+    return res.status(403).json({ error: "Forbidden: admin access required" });
+  }
+  next();
+}
+
+const { verifyJWT } = require("../middleware/auth");
+const analyticsService = require("../services/analyticsService");
+
+function requireAdmin(req, res, next) {
+  const admins = (process.env.ADMIN_PUBLIC_KEYS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (admins.length === 0 || !admins.includes(req.user && req.user.publicKey)) {
+    return res.status(403).json({ error: "Forbidden: admin access required" });
+  }
+  next();
+}
 
 function getAdminPublicKeys() {
   return (process.env.ADMIN_PUBLIC_KEYS || "")
@@ -38,7 +67,7 @@ router.get(
   "/:publicKey/summary",
   strictLimiter,
   validatePublicKey(),
-  analyticsController.getSummary
+  analyticsController.getSummary,
 );
 
 /**
@@ -49,7 +78,7 @@ router.get(
   "/:publicKey/top-recipients",
   strictLimiter,
   validatePublicKey(),
-  analyticsController.getTopRecipients
+  analyticsController.getTopRecipients,
 );
 
 /**
@@ -60,7 +89,26 @@ router.get(
   "/:publicKey/activity",
   strictLimiter,
   validatePublicKey(),
-  analyticsController.getActivityByDay
+  analyticsController.getActivityByDay,
+);
+
+/**
+ * DELETE /api/analytics/cache/:publicKey
+ * Admin-only: force-invalidate all cached analytics for a public key.
+ */
+router.delete(
+  "/cache/:publicKey",
+  verifyJWT,
+  requireAdmin,
+  async (req, res, next) => {
+    try {
+      const { publicKey } = req.params;
+      const invalidated = await analyticsService.clearCache(publicKey);
+      res.json({ success: true, data: { publicKey, invalidated } });
+    } catch (err) {
+      next(err);
+    }
+  },
 );
 
 /**
