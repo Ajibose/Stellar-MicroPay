@@ -22,10 +22,10 @@ const app = require("../src/server");
 const stellarService = require("../src/services/stellarService");
 const idempotencyService = require("../src/services/idempotencyService");
 
-const SUBMIT_PATH = "/api/payments/submit";
+const SUBMIT_PATH = "/api/payments/broadcast";
 const UUID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
 
-describe("POST /api/payments/submit idempotency", () => {
+describe("POST /api/payments/broadcast idempotency", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     idempotencyService.clear();

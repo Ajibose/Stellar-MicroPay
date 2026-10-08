@@ -44,15 +44,15 @@ router.get(
 );
 
 /**
- * POST /api/payments/submit
- * Submit a signed payment. Accepts an optional `X-Idempotency-Key` header (UUID)
- * so retried submissions replay the original response instead of double-spending.
+ * POST /api/payments/broadcast
+ * Submit a signed transaction. Accepts an optional `X-Idempotency-Key` header
+ * (UUID) so retries replay the original response instead of double-spending.
  */
 router.post(
-  "/submit",
+  "/broadcast",
   strictLimiter,
   idempotency,
-  paymentController.submitPayment,
+  paymentController.submitSignedTransaction,
 );
 
 /**

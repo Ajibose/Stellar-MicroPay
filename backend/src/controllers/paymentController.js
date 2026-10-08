@@ -131,6 +131,26 @@ async function submitPayment(req, res, next) {
 }
 
 /**
+ * POST /api/payments/broadcast
+ * Submit a signed transaction envelope to Horizon.
+ */
+async function submitSignedTransaction(req, res, next) {
+  try {
+    const { signedXDR } = req.body || {};
+    if (!signedXDR) {
+      const error = new Error("signedXDR is required");
+      error.status = 400;
+      throw error;
+    }
+
+    const result = await stellarService.submitTransaction(signedXDR);
+    res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * GET /api/payments/:publicKey
  */
 async function getPayments(req, res, next) {
@@ -205,4 +225,10 @@ async function getStreamStatus(req, res, next) {
   }
 }
 
-module.exports = { getPayments, getStats, getStreamStatus, submitPayment };
+module.exports = {
+  getPayments,
+  getStats,
+  getStreamStatus,
+  submitPayment,
+  submitSignedTransaction,
+};
