@@ -1,11 +1,13 @@
 import {
   buildAccountMergeTransaction,
+  buildMemo,
   buildPaymentTransaction,
   collectSignatures,
   createStellarMemo,
   getNetworkPassphrase,
   isValidStellarAddress,
   memoTextByteLength,
+  memoValueError,
   server,
   TransactionCategory,
   truncateMemoText,
@@ -85,19 +87,15 @@ describe("Stellar helper", () => {
       expect(combinedTx.signatures.length).toBe(2);
 
       // Verify that the signatures match the expected signers
-      const hints = combinedTx.signatures.map((sig) =>
-        Buffer.from(sig.hint()).toString("hex")
-      );
+      const hints = combinedTx.signatures.map((sig) => sig.hint.toString());
 
       // Get expected hints from the signers' public keys (last 4 bytes)
-      const expectedHint1 = Keypair.fromPublicKey(signer1.publicKey())
-        .rawPublicKey()
-        .slice(-4)
-        .toString("hex");
-      const expectedHint2 = Keypair.fromPublicKey(signer2.publicKey())
-        .rawPublicKey()
-        .slice(-4)
-        .toString("hex");
+      const expectedHint1 = Buffer.from(
+        Keypair.fromPublicKey(signer1.publicKey()).rawPublicKey().slice(-4)
+      ).toString("hex");
+      const expectedHint2 = Buffer.from(
+        Keypair.fromPublicKey(signer2.publicKey()).rawPublicKey().slice(-4)
+      ).toString("hex");
 
       expect(hints).toContain(expectedHint1);
       expect(hints).toContain(expectedHint2);
@@ -200,7 +198,7 @@ describe("Stellar helper", () => {
         memoType: "text",
       });
       expect(tx.memo.type).toBe("text");
-      expect(tx.memo.value).toBe("Invoice");
+      expect(Buffer.from(tx.memo.value as Uint8Array).toString("utf8")).toBe("Invoice");
       expect(createStellarMemo("text", "Invoice").type).toBe("text");
     });
 
@@ -289,5 +287,117 @@ describe("isValidStellarAddress", () => {
     const address = "G" + "A".repeat(54);
     expect(address).toHaveLength(55);
     expect(isValidStellarAddress(address)).toBe(false);
+  });
+});
+
+describe("memo types", () => {
+  const SOURCE_PUBLIC_KEY = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+  const DEST_PUBLIC_KEY = "GB62CUHQB72WRU3LZFL5BIXMQVQ22MJCDX4FZUBGBQH3PPPPS6INOCLV";
+
+  const mockSourceAccount = () =>
+    jest.spyOn(server, "loadAccount").mockResolvedValue(
+      new Account(SOURCE_PUBLIC_KEY, "1234567890") as any
+    );
+
+  describe("buildMemo", () => {
+    it("builds MEMO_TEXT and still truncates at the 28-byte cap", () => {
+      const memo = buildMemo("text", "a".repeat(40));
+
+      expect(memo.type).toBe("text");
+      expect(Buffer.from(memo.value as Uint8Array).toString("utf8")).toBe("a".repeat(28));
+    });
+
+    it("builds MEMO_ID from a uint64 string", () => {
+      const memo = buildMemo("id", "18446744073709551615");
+
+      expect(memo.type).toBe("id");
+      expect(memo.value).toBe("18446744073709551615");
+    });
+
+    it("builds MEMO_HASH from 32 bytes of hex", () => {
+      const memo = buildMemo("hash", "ab".repeat(32));
+
+      expect(memo.type).toBe("hash");
+      expect(Buffer.from(memo.value as Uint8Array).toString("hex")).toBe("ab".repeat(32));
+    });
+
+    it("builds MEMO_RETURN from 32 bytes of hex", () => {
+      const memo = buildMemo("return", "cd".repeat(32));
+
+      expect(memo.type).toBe("return");
+      expect(Buffer.from(memo.value as Uint8Array).toString("hex")).toBe("cd".repeat(32));
+    });
+
+    it("rejects a MEMO_ID above the uint64 range instead of rounding it", () => {
+      expect(() => buildMemo("id", "18446744073709551616")).toThrow(/unsigned 64-bit/);
+    });
+
+    it("rejects a non-numeric MEMO_ID", () => {
+      expect(() => buildMemo("id", "12345abc")).toThrow(/whole number/);
+    });
+
+    it("rejects a MEMO_HASH that is not 32 bytes", () => {
+      expect(() => buildMemo("hash", "ab".repeat(16))).toThrow(/32 bytes/);
+    });
+
+    it("rejects a non-hexadecimal MEMO_RETURN", () => {
+      expect(() => buildMemo("return", "z".repeat(64))).toThrow(/hexadecimal/);
+    });
+  });
+
+  describe("memoValueError", () => {
+    it("treats an empty memo as valid, because it is simply not attached", () => {
+      expect(memoValueError("id", "")).toBeNull();
+      expect(memoValueError("hash", "   ")).toBeNull();
+    });
+
+    it("accepts each type at its boundary", () => {
+      expect(memoValueError("text", "a".repeat(28))).toBeNull();
+      expect(memoValueError("text", "a".repeat(29))).toMatch(/28 bytes/);
+      expect(memoValueError("id", "0")).toBeNull();
+      expect(memoValueError("hash", "0f".repeat(32))).toBeNull();
+    });
+  });
+
+  describe("buildPaymentTransaction", () => {
+    it.each([
+      ["text", "rent for march", "text"],
+      ["id", "9007199254740993", "id"],
+      ["hash", "ab".repeat(32), "hash"],
+      ["return", "cd".repeat(32), "return"],
+    ] as const)("puts a %s memo on the transaction", async (memoType, value, expectedType) => {
+      mockSourceAccount();
+
+      const transaction = await buildPaymentTransaction({
+        fromPublicKey: SOURCE_PUBLIC_KEY,
+        toPublicKey: DEST_PUBLIC_KEY,
+        amount: "1.0000000",
+        memo: value,
+        memoType,
+      });
+
+      expect(transaction.memo.type).toBe(expectedType);
+      if (expectedType === "hash" || expectedType === "return") {
+        expect(Buffer.from(transaction.memo.value as Uint8Array).toString("hex")).toBe(value);
+      } else if (expectedType === "text") {
+        expect(Buffer.from(transaction.memo.value as Uint8Array).toString("utf8")).toBe(value);
+      } else {
+        expect(transaction.memo.value).toBe(value);
+      }
+    });
+
+    it("still defaults to MEMO_TEXT when no type is given", async () => {
+      mockSourceAccount();
+
+      const transaction = await buildPaymentTransaction({
+        fromPublicKey: SOURCE_PUBLIC_KEY,
+        toPublicKey: DEST_PUBLIC_KEY,
+        amount: "1.0000000",
+        memo: "invoice 42",
+      });
+
+      expect(transaction.memo.type).toBe("text");
+      expect(Buffer.from(transaction.memo.value as Uint8Array).toString("utf8")).toBe("invoice 42");
+    });
   });
 });

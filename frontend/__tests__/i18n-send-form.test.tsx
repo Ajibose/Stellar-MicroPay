@@ -10,6 +10,11 @@ jest.mock("@/lib/stellar", () => ({
   buildReceiptMintTransaction: jest.fn(),
   buildSorobanTipTransaction: jest.fn(),
   explorerUrl: jest.fn((hash: string) => `https://stellar.expert/tx/${hash}`),
+  fetchFeePercentiles: jest.fn().mockResolvedValue({
+    slow: { stroops: 100, xlm: "0.0000100" },
+    normal: { stroops: 200, xlm: "0.0000200" },
+    fast: { stroops: 500, xlm: "0.0000500" },
+  }),
   fetchNetworkFeeStats: jest
     .fn()
     .mockResolvedValue({ feeLevel: "normal", baseFeeXlm: 0.00001 }),
