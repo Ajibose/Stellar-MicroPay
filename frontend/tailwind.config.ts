@@ -12,7 +12,7 @@ const config: Config = {
     extend: {
       colors: {
         stellar: {
-          50:  "#f0f9ff",
+          50: "#f0f9ff",
           100: "#e0f2fe",
           200: "#bae6fd",
           300: "#7dd3fc",
@@ -62,8 +62,8 @@ const config: Config = {
         },
       },
     },
+    plugins: [],
   },
-  plugins: [],
 };
 
 export default config;

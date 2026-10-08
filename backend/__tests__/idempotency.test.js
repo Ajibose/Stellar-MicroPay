@@ -5,6 +5,10 @@
 
 "use strict";
 
+jest.mock("../src/middleware/requestSignature", () => ({
+  requireSignedRequest: (req, res, next) => next(),
+}));
+
 const request = require("supertest");
 
 jest.mock("../src/services/stellarService", () => ({

@@ -395,7 +395,7 @@ describe("Analytics Service", () => {
     });
   });
 });
-
+ 
 describe("Analytics Service Cache Archiving (#1210)", () => {
   beforeEach(() => {
     // The sweep interval is created at module load, i.e. before fake timers are

@@ -12,7 +12,10 @@ const { validatePublicKey } = require("../middleware/sanitization");
 const { idempotency } = require("../middleware/idempotency");
 const { requireSignedRequest } = require("../middleware/requestSignature");
 const paymentController = require("../controllers/paymentController");
-const { horizonCircuitBreakerMiddleware } = require("../middleware/horizonCircuitBreaker");
+const {
+  horizonCircuitBreakerMiddleware,
+} = require("../middleware/horizonCircuitBreaker");
+const { requireSignedRequest } = require("../middleware/requestSignature");
 
 /**
  * POST /api/payments/submit
@@ -27,7 +30,7 @@ router.post(
   "/submit",
   strictLimiter,
   requireSignedRequest,
-  paymentController.submitPayment
+  paymentController.submitPayment,
 );
 
 /**
@@ -35,7 +38,11 @@ router.post(
  * Return status of a Soroban streaming payment contract.
  * Must be defined before :publicKey to avoid route conflicts.
  */
-router.get("/stream-status/:streamId", strictLimiter, paymentController.getStreamStatus);
+router.get(
+  "/stream-status/:streamId",
+  strictLimiter,
+  paymentController.getStreamStatus,
+);
 
 /**
  * POST /api/payments/broadcast
@@ -52,12 +59,23 @@ router.post("/broadcast", strictLimiter, idempotency, paymentController.submitSi
  *   limit  — number of results (default: 20, max: 100)
  *   cursor — pagination cursor
  */
-router.get("/:publicKey", strictLimiter, validatePublicKey(), horizonCircuitBreakerMiddleware, paymentController.getPayments);
+router.get(
+  "/:publicKey",
+  strictLimiter,
+  validatePublicKey(),
+  horizonCircuitBreakerMiddleware,
+  paymentController.getPayments,
+);
 
 /**
  * GET /api/payments/:publicKey/stats
  * Return aggregate stats for an account (total sent, received, count).
  */
-router.get("/:publicKey/stats", validatePublicKey(), horizonCircuitBreakerMiddleware, paymentController.getStats);
+router.get(
+  "/:publicKey/stats",
+  validatePublicKey(),
+  horizonCircuitBreakerMiddleware,
+  paymentController.getStats,
+);
 
 module.exports = router;
