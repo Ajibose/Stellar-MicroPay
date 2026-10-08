@@ -5,7 +5,6 @@
 
 "use strict";
 
-const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -27,31 +26,19 @@ const healthRoutes = require("./routes/health");
 const federationRoutes = require("./routes/federation");
 const turretsRoutes = require("./routes/turrets");
 const tipsRoutes = require("./routes/tips");
-const webhookRoutes = require("./routes/webhooks");
+const contactsRoutes = require("./routes/contacts");
+const webhooksRoutes = require("./routes/webhooks");
 const networkRoutes = require("./routes/network");
 const priceAlertsRoutes = require("./routes/priceAlerts");
+const requestId = require("./middleware/requestId");
 const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./swagger");
 const { startTurretsServer } = require("./turretsServer");
 const { sanitizeRequest } = require("./middleware/sanitization");
+const { csrfProtection } = require("./middleware/csrf");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
-
-/**
- * Attach a correlation id to every request: echo the caller's X-Request-ID
- * when supplied, otherwise generate one. The id is echoed back on the
- * response and available to morgan and the error handler.
- */
-function requestId(req, res, next) {
-  const supplied = req.headers["x-request-id"];
-  req.requestId =
-    typeof supplied === "string" && supplied.trim()
-      ? supplied.trim()
-      : crypto.randomUUID();
-  res.setHeader("X-Request-ID", req.requestId);
-  next();
-}
 
 // ─── Middleware ─────────────────────────────────────────────────────────────────
 
@@ -99,6 +86,16 @@ app.use(
   })
 );
 
+// ─── CSRF Protection ────────────────────────────────────────────────────────
+// Double-submit cookie verification for state-changing requests. The SEP-0010
+// auth endpoints bootstrap the token/session and must stay reachable without
+// one, so they are exempt. See src/middleware/csrf.js and the analysis in
+// src/middleware/auth.js.
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api/auth")) return next();
+  return csrfProtection(req, res, next);
+});
+
 // Global rate limiting — 100 requests per 15 minutes per IP
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -119,12 +116,19 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/health", healthRoutes);
 app.use("/api/turrets", turretsRoutes);
 app.use("/api/tips", tipsRoutes);
-app.use("/api/webhooks", webhookRoutes);
+app.use("/api/contacts", contactsRoutes);
+app.use("/api/webhooks", webhooksRoutes);
 app.use("/api/network", networkRoutes);
 app.use("/api/price-alerts", priceAlertsRoutes);
 app.use("/federation", federationRoutes);
 
 // ─── API Documentation ─────────────────────────────────────────────────────────
+
+if (process.env.METRICS_ENABLED === "true") {
+  const client = require("prom-client");
+  client.collectDefaultMetrics();
+  app.get("/metrics", (req, res) => { res.set("Content-Type", client.register.contentType); res.end(client.register.metrics()); });
+}
 
 app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
   customSiteTitle: "Stellar MicroPay API Docs",
@@ -164,6 +168,10 @@ SERVER = "https://${domain}/federation"
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 if (require.main === module) {
+  // Refuse to start on an insecure configuration rather than serving traffic
+  // with a publicly-known signing key.
+  validateEnv();
+
   const server = app.listen(PORT, () => {
     console.log(`
   ✨ Stellar MicroPay API

@@ -27,6 +27,14 @@ const options = {
       },
     ],
     components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "JWT",
+          description: "SEP-0010 JWT obtained from POST /api/auth",
+        },
+      },
       schemas: {
         Error: {
           type: "object",
@@ -116,6 +124,22 @@ const options = {
               items: { $ref: "#/components/schemas/AccountBalance" },
             },
             subentryCount: { type: "integer" },
+          },
+        },
+        StreamStatus: {
+          type: "object",
+          properties: {
+            payer: { type: "string", description: "Payer Stellar address (contract Address)" },
+            recipient: {
+              type: "string",
+              nullable: true,
+              description: "First recipient address, or null when the stream has none",
+            },
+            ratePerLedger: { type: "string", description: "Tokens accrued per ledger (i128 as string)" },
+            deposited: { type: "string", description: "Total deposited into the stream (i128 as string)" },
+            claimed: { type: "string", description: "Total claimed by all recipients so far (i128 as string)" },
+            startLedger: { type: "integer", description: "Ledger the stream started at" },
+            claimableNow: { type: "string", description: "Derived unclaimed amount as of the latest ledger (i128 as string)" },
           },
         },
         Tip: {
@@ -306,7 +330,44 @@ const options = {
           },
         },
       },
+      "/api/accounts/{publicKey}/memo-history": {
+        get: {
+          tags: ["Accounts"],
+          summary: "Get recently used distinct memo texts for an account",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "publicKey",
+              in: "path",
+              required: true,
+              schema: { type: "string", pattern: "^G[A-Z0-9]{55}$" },
+            },
+          ],
+          responses: {
+            200: {
+              description: "Array of distinct memo texts",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      success: { type: "boolean" },
+                      data: {
+                        type: "array",
+                        items: { type: "string" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: "Unauthorized: missing or invalid token" },
+            400: { description: "Invalid public key" },
+          },
+        },
+      },
       "/api/accounts/resolve/{username}": {
+
         get: {
           tags: ["Accounts"],
           summary: "Resolve a username to a Stellar public key",
@@ -416,6 +477,46 @@ const options = {
           },
         },
       },
+      "/api/payments/stream-status/{streamId}": {
+        get: {
+          tags: ["Payments"],
+          summary: "Get streaming payment channel state from the Soroban contract",
+          description:
+            "Reads the `Stream` entry from the deployed MicroPay contract's persistent storage " +
+            "via Soroban RPC `getContractData` and returns its current state. The contract ID is " +
+            "configured with the `CONTRACT_ID` environment variable. `claimableNow` mirrors the " +
+            "contract's accrual logic (paused ledgers excluded, capped at the funded window).",
+          parameters: [
+            {
+              name: "streamId",
+              in: "path",
+              required: true,
+              schema: { type: "integer", minimum: 0, maximum: 4294967295 },
+              description: "u32 stream id stored in the contract",
+            },
+          ],
+          responses: {
+            200: {
+              description: "Current stream state",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      success: { type: "boolean" },
+                      data: { $ref: "#/components/schemas/StreamStatus" },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: "streamId is not an unsigned 32-bit integer" },
+            404: { description: "Stream not found in contract storage" },
+            503: { description: "CONTRACT_ID not configured or Soroban RPC unavailable" },
+            429: { description: "Rate limit exceeded" },
+          },
+        },
+      },
       "/api/payments/{publicKey}/stats": {
         get: {
           tags: ["Payments"],
@@ -499,9 +600,7 @@ const options = {
                       success: { type: "boolean" },
                       data: {
                         type: "array",
-                        items: {
-                          $ref: "#/components/schemas/TopRecipient",
-                        },
+                        items: { $ref: "#/components/schemas/TopRecipient" },
                       },
                     },
                   },
@@ -541,6 +640,47 @@ const options = {
                 },
               },
             },
+          },
+        },
+      },
+      "/api/analytics/cache/{publicKey}": {
+        delete: {
+          tags: ["Analytics"],
+          summary: "Force-invalidate cached analytics for an account (admin only)",
+          description:
+            "Requires a valid SEP-0010 JWT. The JWT public key must be listed in ADMIN_PUBLIC_KEYS. Removes all cached analytics entries for the target account so the next request fetches fresh data from Horizon.",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "publicKey",
+              in: "path",
+              required: true,
+              schema: { type: "string", pattern: "^G[A-Z0-9]{55}$" },
+            },
+          ],
+          responses: {
+            200: {
+              description: "Cache entries invalidated",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      success: { type: "boolean" },
+                      data: {
+                        type: "object",
+                        properties: {
+                          publicKey: { type: "string" },
+                          invalidated: { type: "integer" },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: "Missing or invalid JWT" },
+            403: { description: "Caller is not an admin account" },
           },
         },
       },
@@ -687,7 +827,7 @@ const options = {
               properties: { url: { type: "string", format: "uri" }, publicKey: { type: "string" }, secret: { type: "string", format: "password" } },
             } } },
           },
-          responses: { 201: { description: "Webhook registered", content: { "application/json": { schema: { $ref: "#/components/schemas/SuccessResponse" } } } }, 400: { description: "Invalid registration" } },
+          responses: { 201: { description: "Webhook registered", content: { "application/json": { schema: { $ref: "#/components/schemas/SuccessResponse" } } } }, 400: { description: "Invalid registration payload" } },
         },
       },
       "/api/webhooks/{id}": {
@@ -770,3 +910,4 @@ const options = {
 };
 
 module.exports = swaggerJsdoc(options);
+

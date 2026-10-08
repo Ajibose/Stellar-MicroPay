@@ -6,13 +6,22 @@
 import { useState, useEffect } from "react";
 import Head from "next/head";
 import Link from "next/link";
+import { useRouter } from "next/router";
 import { getNetworkConfig, setNetworkConfig, NetworkConfig } from "@/lib/stellar";
 import { disconnectWallet } from "@/lib/wallet";
 import { shortenAddress } from "@/lib/stellar";
 import { useWallet } from "@/lib/useWallet";
 import { resetOnboardingTour } from "@/hooks/useOnboarding";
+import { useTranslation } from "@/contexts/I18nContext";
+import {
+  LOCALE_LABELS,
+  SUPPORTED_LOCALES,
+  type Locale,
+} from "@/lib/i18n";
+import WalletHealthPanel from "@/components/WalletHealthPanel";
 
 export default function SettingsPage() {
+  const router = useRouter();
   const { publicKey, disconnectWallet: disconnectCurrentWallet } = useWallet();
   const { t, locale, setLocale } = useTranslation();
   const [config, setConfig] = useState<NetworkConfig>({
@@ -22,6 +31,9 @@ export default function SettingsPage() {
   const [customUrl, setCustomUrl] = useState("");
   const [showMainnetWarning, setShowMainnetWarning] = useState(false);
   const [pendingNetwork, setPendingNetwork] = useState<"testnet" | "mainnet" | "custom" | null>(null);
+  const [fiatCurrency, setFiatCurrency] = useState<string>("USD");
+  useEffect(() => { setFiatCurrency(localStorage.getItem("stellar-micropay:fiat") || "USD"); }, []);
+  const changeFiatCurrency = (code: string) => { setFiatCurrency(code); localStorage.setItem("stellar-micropay:fiat", code); };
 
   // Username registration state
   const [username, setUsername] = useState("");
@@ -264,6 +276,13 @@ export default function SettingsPage() {
     } finally {
       setUsernameLoading(false);
     }
+  };
+
+  const handleClearAllData = () => {
+    if (!window.confirm("Are you sure? This will delete your contacts and settings.")) return;
+    Object.keys(localStorage).filter((k) => k.startsWith("stellar-micropay:")).forEach((k) => localStorage.removeItem(k));
+    disconnectCurrentWallet();
+    void router.push("/");
   };
 
   const confirmMainnetSwitch = () => {
@@ -607,6 +626,9 @@ export default function SettingsPage() {
                 </div>
               </div>
             )}
+
+            {/* Wallet Health Check Section - Issue #1192 */}
+            {publicKey && <WalletHealthPanel publicKey={publicKey} />}
           </div>
         </main>
       </div>

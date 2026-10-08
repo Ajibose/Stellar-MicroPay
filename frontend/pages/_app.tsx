@@ -10,11 +10,15 @@ import { useRouter } from "next/router";
 import Head from "next/head";
 import Navbar from "@/components/Navbar";
 import ErrorBoundary from "@/components/ErrorBoundary";
-import QuickSendModal from "@/components/QuickSendModal";
 import { WalletProvider, useWallet } from "@/lib/useWallet";
 import ToastProvider from "@/lib/ToastContext";
 
 const AIPaymentAssistant = dynamic(() => import("@/components/AIPaymentAssistant"), {
+  ssr: false,
+});
+// Lazy-load the quick-send modal: it pulls in the full Stellar SDK and only
+// mounts for connected wallets, so keep it out of the initial bundle.
+const QuickSendModal = dynamic(() => import("@/components/QuickSendModal"), {
   ssr: false,
 });
 import {
@@ -132,6 +136,18 @@ function AppShell({
   const { publicKey } = useWallet();
   const router = useRouter();
   const [isAssistantOpen, setIsAssistantOpen] = useState(false);
+  const [isOffline, setIsOffline] = useState(false);
+
+  useEffect(() => {
+    const updateOffline = () => setIsOffline(!navigator.onLine);
+    updateOffline();
+    window.addEventListener("online", updateOffline);
+    window.addEventListener("offline", updateOffline);
+    return () => {
+      window.removeEventListener("online", updateOffline);
+      window.removeEventListener("offline", updateOffline);
+    };
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -161,6 +177,9 @@ function AppShell({
 
   return (
     <>
+      {isOffline && (
+        <div role="alert" className="w-full bg-amber-500/15 px-4 py-2 text-center text-sm text-amber-200">You&apos;re offline — data may not be up to date.</div>
+      )}
       <div className="min-h-screen bg-white bg-grid transition-colors duration-300 dark:bg-cosmos-900">
         <Navbar onOpenAssistant={() => setIsAssistantOpen(true)} />
         <main>

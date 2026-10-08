@@ -4,6 +4,7 @@
  *
  * GET  /api/auth?account=G... → returns a challenge transaction
  * POST /api/auth              → verifies signed challenge, returns JWT
+ * GET  /api/auth/csrf         → issues a CSRF double-submit token
  */
 "use strict";
 
@@ -13,8 +14,10 @@ const { Utils, Keypair } = require("@stellar/stellar-sdk");
 const { JWT_SECRET } = require("../middleware/auth");
 const {
   authChallengeLimiter,
+  authLegacyChallengeLimiter,
   authVerifyLimiter,
 } = require("../middleware/rateLimit");
+const { setCsrfCookie } = require("../middleware/csrf");
 
 const router = express.Router();
 
@@ -58,7 +61,7 @@ function issueChallenge(req, res) {
 
 // Keep the original endpoint available while clients migrate to /challenge.
 router.get("/challenge", authChallengeLimiter, issueChallenge);
-router.get("/", authChallengeLimiter, issueChallenge);
+router.get("/", authLegacyChallengeLimiter, issueChallenge);
 
 // POST /api/auth/verify — verify signed challenge and issue JWT
 function verifyChallenge(req, res) {
@@ -86,7 +89,10 @@ function verifyChallenge(req, res) {
       maxAge:   24 * 60 * 60 * 1000,
     });
 
-    res.json({ success: true, token });
+    // Establish the readable double-submit token alongside the session.
+    const csrfToken = setCsrfCookie(res);
+
+    res.json({ success: true, token, csrfToken });
   } catch (e) {
     res.status(401).json({ error: "Unauthorized: " + e.message });
   }
@@ -95,5 +101,11 @@ function verifyChallenge(req, res) {
 // Keep the original endpoint available while clients migrate to /verify.
 router.post("/verify", authVerifyLimiter, verifyChallenge);
 router.post("/", authVerifyLimiter, verifyChallenge);
+
+// GET /api/auth/csrf — issue a readable double-submit token.
+router.get("/csrf", (req, res) => {
+  const csrfToken = setCsrfCookie(res);
+  res.json({ csrfToken });
+});
 
 module.exports = router;
