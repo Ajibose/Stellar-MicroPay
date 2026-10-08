@@ -25,6 +25,21 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+const { verifyJWT } = require("../middleware/auth");
+const analyticsService = require("../services/analyticsService");
+
+function requireAdmin(req, res, next) {
+  const admins = (process.env.ADMIN_PUBLIC_KEYS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (admins.length === 0 || !admins.includes(req.user && req.user.publicKey)) {
+    return res.status(403).json({ error: "Forbidden: admin access required" });
+  }
+  next();
+}
+
 /**
  * GET /api/analytics/:publicKey/summary
  * Returns: total sent, received, unique counterparties, avg transaction size.

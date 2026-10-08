@@ -151,9 +151,13 @@ async function submitSignedTransaction(req, res, next) {
 }
 
 /**
- * GET /api/payments/:publicKey
+ * POST /api/payments/broadcast
+ * Submit a signed payment transaction to Horizon.
+ *
+ * Safe to retry: when an `X-Idempotency-Key` header is supplied, the
+ * idempotency middleware replays the cached response for repeats within 24h.
  */
-async function getPayments(req, res, next) {
+async function submitSignedTransaction(req, res, next) {
   try {
     const { publicKey } = req.params;
     const limit = Math.min(parseInt(req.query.limit) || 20, 100);
@@ -225,10 +229,4 @@ async function getStreamStatus(req, res, next) {
   }
 }
 
-module.exports = {
-  getPayments,
-  getStats,
-  getStreamStatus,
-  submitPayment,
-  submitSignedTransaction,
-};
+module.exports = { getPayments, getStats, getStreamStatus, submitPayment, submitSignedTransaction };

@@ -10,6 +10,7 @@ const router = express.Router();
 const { strictLimiter } = require("../middleware/rateLimit");
 const { validatePublicKey } = require("../middleware/sanitization");
 const { idempotency } = require("../middleware/idempotency");
+const { requireSignedRequest } = require("../middleware/requestSignature");
 const paymentController = require("../controllers/paymentController");
 const {
   horizonCircuitBreakerMiddleware,
@@ -45,15 +46,10 @@ router.get(
 
 /**
  * POST /api/payments/broadcast
- * Submit a signed transaction. Accepts an optional `X-Idempotency-Key` header
- * (UUID) so retries replay the original response instead of double-spending.
+ * Submit a signed payment. Accepts an optional `X-Idempotency-Key` header (UUID)
+ * so retried submissions replay the original response instead of double-spending.
  */
-router.post(
-  "/broadcast",
-  strictLimiter,
-  idempotency,
-  paymentController.submitSignedTransaction,
-);
+router.post("/broadcast", strictLimiter, idempotency, paymentController.submitSignedTransaction);
 
 /**
  * GET /api/payments/:publicKey
